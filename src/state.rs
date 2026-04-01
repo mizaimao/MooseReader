@@ -5,12 +5,11 @@ use std::fs;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Bookmark {
     pub chapter: usize,
-    pub offset: usize,
+    pub progress: f64, // Changed from offset to a percentage
 }
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct State {
-    // Maps the absolute file path of a book to its saved bookmark
     pub books: HashMap<String, Bookmark>,
 }
 
