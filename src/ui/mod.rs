@@ -5,6 +5,7 @@ use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyEventKind},
     execute,
+    style::{SetBackgroundColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use std::fs::File;
@@ -16,11 +17,7 @@ use crate::epub::load_chapter;
 use crate::state::{save_state, Bookmark, State};
 
 #[derive(PartialEq)]
-pub enum AppMode {
-    Reading,
-    TocMenu,
-    SettingsMenu,
-}
+pub enum AppMode { Reading, TocMenu, SettingsMenu }
 
 pub struct AppState {
     pub mode: AppMode,
@@ -36,11 +33,7 @@ pub struct AppState {
 }
 
 pub fn run(
-    mut archive: ZipArchive<File>,
-    spine: Vec<(String, String)>,
-    mut cfg: Config,
-    mut state: State,
-    book_path: String,
+    mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg: Config, mut state: State, book_path: String,
 ) -> io::Result<()> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
@@ -57,42 +50,40 @@ pub fn run(
         term_rows,
     };
 
-    // Load State
     let progress = if let Some(bookmark) = state.books.get(&book_path) {
         app.chapter_index = std::cmp::min(bookmark.chapter, spine.len().saturating_sub(1));
         bookmark.progress
-    } else {
-        0.0
-    };
+    } else { 0.0 };
 
     app.toc_cursor = app.chapter_index;
     let mut lines = load_chapter(&mut archive, &spine[app.chapter_index].0, app.dynamic_width, cfg.margin_left);
     app.offset = (progress * lines.len() as f64).floor() as usize;
-    if app.offset >= lines.len() {
-        app.offset = lines.len().saturating_sub(app.lines_per_page);
-    }
+    if app.offset >= lines.len() { app.offset = lines.len().saturating_sub(app.lines_per_page); }
 
     let mut stdout = io::stdout();
     enable_raw_mode()?;
     execute!(stdout, Hide, Clear(ClearType::All))?;
 
-    // --- MAIN LOOP ---
     loop {
-        execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+        // Grab the active color palette and flood-fill the background
+        let palette = render::get_palette(&cfg.theme);
+        execute!(
+            stdout, 
+            MoveTo(0, 0), 
+            SetBackgroundColor(palette.bg), 
+            SetForegroundColor(palette.fg), 
+            Clear(ClearType::All)
+        )?;
 
-        // 1. Render Background
-        render::draw_reading_view(&mut stdout, &app, &cfg, &lines, &spine)?;
-
-        // 2. Render Overlays
+        // Pass the palette into the render functions
+        render::draw_reading_view(&mut stdout, &app, &cfg, &lines, &spine, &palette)?;
         match app.mode {
-            AppMode::TocMenu => render::draw_toc_menu(&mut stdout, &mut app, &cfg, &spine)?,
-            AppMode::SettingsMenu => render::draw_settings_menu(&mut stdout, &app, &cfg)?,
+            AppMode::TocMenu => render::draw_toc_menu(&mut stdout, &mut app, &cfg, &spine, &palette)?,
+            AppMode::SettingsMenu => render::draw_settings_menu(&mut stdout, &app, &cfg, &palette)?,
             AppMode::Reading => {}
         }
-
         stdout.flush()?;
 
-        // 3. Handle Events
         if event::poll(std::time::Duration::from_millis(500))? {
             if let Event::Key(key_event) = event::read()? {
                 if key_event.kind == KeyEventKind::Press {
@@ -101,7 +92,6 @@ pub fn run(
                         AppMode::TocMenu => input::handle_toc_input(key_event.code, &mut app, &cfg, &mut lines, &mut archive, &spine),
                         AppMode::SettingsMenu => input::handle_settings_input(key_event.code, &mut app, &mut cfg, &mut lines, &mut archive, &spine),
                     };
-
                     if quit_requested {
                         let current_progress = if lines.is_empty() { 0.0 } else { app.offset as f64 / lines.len() as f64 };
                         state.books.insert(book_path.clone(), Bookmark { chapter: app.chapter_index, progress: current_progress });
@@ -115,7 +105,8 @@ pub fn run(
         }
     }
 
-    execute!(stdout, Show)?;
+    // Reset colors when closing the app
+    execute!(stdout, crossterm::style::ResetColor, Show)?;
     disable_raw_mode()?;
     Ok(())
 }
