@@ -1,2 +1,3 @@
 # MooseReader
-Testing repo for a rust programming project.
+
+A simple epub reader runnable inside a terminal emulator, implemented in Rust.
