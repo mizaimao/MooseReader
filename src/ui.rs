@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use zip::ZipArchive;
 
-use crate::config::{Alignment, Config};
+use crate::config::{save_config, Alignment, Config};
 use crate::epub::load_chapter;
 use crate::state::{save_state, Bookmark, State};
 
@@ -16,6 +16,7 @@ use crate::state::{save_state, Bookmark, State};
 enum AppMode {
     Reading,
     TocMenu,
+    SettingsMenu,
 }
 
 pub fn run(
@@ -53,6 +54,8 @@ pub fn run(
     let mut mode = AppMode::Reading;
     let mut toc_cursor = chapter_index;
     let mut toc_top = 0;
+    
+    let mut settings_cursor = 0; 
 
     let mut stdout = io::stdout();
     enable_raw_mode()?;
@@ -91,6 +94,7 @@ pub fn run(
         }
 
         // --- 2. DRAW OVERLAYS ---
+        
         if mode == AppMode::TocMenu {
             let box_width_usize = std::cmp::max(30, std::cmp::min(70, dynamic_width.saturating_sub(4)));
             let box_width = box_width_usize as u16;
@@ -99,51 +103,73 @@ pub fn run(
             let text_center_x = cfg.margin_left + (dynamic_width / 2);
             let mut start_x = text_center_x.saturating_sub(box_width_usize / 2) as u16;
             
-            if start_x + box_width > term_cols {
-                start_x = term_cols.saturating_sub(box_width);
-            }
-            
+            if start_x + box_width > term_cols { start_x = term_cols.saturating_sub(box_width); }
             let start_y = term_rows.saturating_sub(box_height) / 2;
 
             execute!(stdout, MoveTo(start_x, start_y))?;
             let title = " Table of Contents ";
             let dashes = box_width as usize - 2 - title.len();
-            
-            // FIX: Added \x1b[1m (Bold) and \x1b[0m (Reset) directly to the print macro
             print!("╭\x1b[1m{}\x1b[0m{}╮", title, "─".repeat(dashes));
 
             let visible_items = box_height as usize - 2;
-            if toc_cursor < toc_top {
-                toc_top = toc_cursor;
-            } else if toc_cursor >= toc_top + visible_items {
-                toc_top = toc_cursor - visible_items + 1;
-            }
+            if toc_cursor < toc_top { toc_top = toc_cursor; } 
+            else if toc_cursor >= toc_top + visible_items { toc_top = toc_cursor - visible_items + 1; }
 
             let max_title_len = box_width as usize - 6;
             for i in 0..visible_items {
                 execute!(stdout, MoveTo(start_x, start_y + 1 + i as u16))?;
                 let idx = toc_top + i;
-
                 if idx < spine.len() {
                     let mut chap_title = spine[idx].1.clone();
-                    
                     if chap_title.chars().count() > max_title_len {
                         chap_title = chap_title.chars().take(max_title_len - 3).collect::<String>() + "...";
                     }
-
                     let padded_title = format!("{:<width$}", chap_title, width = max_title_len);
-
-                    if idx == toc_cursor {
-                        print!("│ \x1b[7m> {}\x1b[0m │", padded_title);
-                    } else {
-                        print!("│   {} │", padded_title);
-                    }
+                    if idx == toc_cursor { print!("│ \x1b[7m> {}\x1b[0m │", padded_title); } 
+                    else { print!("│   {} │", padded_title); }
                 } else {
                     print!("│{}│", " ".repeat(box_width as usize - 2));
                 }
             }
-
             execute!(stdout, MoveTo(start_x, start_y + box_height - 1))?;
+            print!("╰{}╯", "─".repeat(box_width as usize - 2));
+        }
+
+        if mode == AppMode::SettingsMenu {
+            // FIX: Ensure the box width perfectly matches our string padding
+            let box_width: u16 = 34; 
+            let box_height: u16 = 7;
+            
+            let text_center_x = cfg.margin_left + (dynamic_width / 2);
+            let mut start_x = text_center_x.saturating_sub((box_width / 2) as usize) as u16;
+            if start_x + box_width > term_cols { start_x = term_cols.saturating_sub(box_width); }
+            let start_y = term_rows.saturating_sub(box_height) / 2;
+
+            execute!(stdout, MoveTo(start_x, start_y))?;
+            print!("╭\x1b[1m Settings \x1b[0m{}╮", "─".repeat(box_width as usize - 12));
+
+            let labels = ["Max Width", "Margin Left", "Margin Right"];
+            let values = [cfg.max_width, cfg.margin_left, cfg.margin_right];
+
+            execute!(stdout, MoveTo(start_x, start_y + 1))?;
+            print!("│{}│", " ".repeat(box_width as usize - 2));
+
+            for i in 0..3 {
+                execute!(stdout, MoveTo(start_x, start_y + 2 + i as u16))?;
+                if settings_cursor == i {
+                    let content = format!("{:<14} < {:>3} >", labels[i], values[i]);
+                    // FIX: {:^32} forces exactly 32 spaces of width, obliterating background text
+                    print!("│\x1b[7m{:^32}\x1b[0m│", content);
+                } else {
+                    let content = format!("{:<14}   {:>3}  ", labels[i], values[i]);
+                    // FIX: Match the active row padding
+                    print!("│{:^32}│", content);
+                }
+            }
+
+            execute!(stdout, MoveTo(start_x, start_y + 5))?;
+            print!("│{}│", " ".repeat(box_width as usize - 2));
+            execute!(stdout, MoveTo(start_x, start_y + 6))?;
             print!("╰{}╯", "─".repeat(box_width as usize - 2));
         }
         
@@ -155,21 +181,58 @@ pub fn run(
                 if key_event.kind == KeyEventKind::Press {
                     
                     match mode {
-                        AppMode::TocMenu => {
+                        AppMode::SettingsMenu => {
                             match key_event.code {
-                                KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') => {
+                                KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter => {
+                                    save_config(&cfg); 
                                     mode = AppMode::Reading;
                                 }
+                                
                                 KeyCode::Char('j') | KeyCode::Down => {
-                                    if toc_cursor + 1 < spine.len() {
-                                        toc_cursor += 1;
-                                    }
+                                    settings_cursor = (settings_cursor + 1) % 3;
                                 }
                                 KeyCode::Char('k') | KeyCode::Up => {
-                                    if toc_cursor > 0 {
-                                        toc_cursor -= 1;
+                                    settings_cursor = if settings_cursor == 0 { 2 } else { settings_cursor - 1 };
+                                }
+                                
+                                KeyCode::Char('h') | KeyCode::Left => {
+                                    let mut changed = false;
+                                    if settings_cursor == 0 && cfg.max_width > 20 { cfg.max_width -= 1; changed = true; }
+                                    else if settings_cursor == 1 && cfg.margin_left > 0 { cfg.margin_left -= 1; changed = true; }
+                                    else if settings_cursor == 2 && cfg.margin_right > 0 { cfg.margin_right -= 1; changed = true; }
+
+                                    if changed {
+                                        let current_progress = if lines.is_empty() { 0.0 } else { offset as f64 / lines.len() as f64 };
+                                        dynamic_width = std::cmp::max(10, std::cmp::min(cfg.max_width, (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right)));
+                                        lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
+                                        offset = (current_progress * lines.len() as f64).floor() as usize;
+                                        if offset >= lines.len() { offset = lines.len().saturating_sub(lines_per_page); }
                                     }
                                 }
+                                
+                                KeyCode::Char('l') | KeyCode::Right => {
+                                    let mut changed = false;
+                                    if settings_cursor == 0 && cfg.max_width < 200 { cfg.max_width += 1; changed = true; }
+                                    else if settings_cursor == 1 && cfg.margin_left < 40 { cfg.margin_left += 1; changed = true; }
+                                    else if settings_cursor == 2 && cfg.margin_right < 40 { cfg.margin_right += 1; changed = true; }
+
+                                    if changed {
+                                        let current_progress = if lines.is_empty() { 0.0 } else { offset as f64 / lines.len() as f64 };
+                                        dynamic_width = std::cmp::max(10, std::cmp::min(cfg.max_width, (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right)));
+                                        lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
+                                        offset = (current_progress * lines.len() as f64).floor() as usize;
+                                        if offset >= lines.len() { offset = lines.len().saturating_sub(lines_per_page); }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        AppMode::TocMenu => {
+                            match key_event.code {
+                                KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') => mode = AppMode::Reading,
+                                KeyCode::Char('j') | KeyCode::Down => if toc_cursor + 1 < spine.len() { toc_cursor += 1; },
+                                KeyCode::Char('k') | KeyCode::Up => if toc_cursor > 0 { toc_cursor -= 1; },
                                 KeyCode::Enter => {
                                     chapter_index = toc_cursor;
                                     lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
@@ -182,17 +245,12 @@ pub fn run(
 
                         AppMode::Reading => {
                             match key_event.code {
-                                KeyCode::Tab => {
-                                    mode = AppMode::TocMenu;
-                                    toc_cursor = chapter_index; 
-                                }
+                                KeyCode::Tab => { mode = AppMode::TocMenu; toc_cursor = chapter_index; }
+                                KeyCode::Char('S') | KeyCode::Char('s') => { mode = AppMode::SettingsMenu; settings_cursor = 0; }
 
                                 KeyCode::Char('q') => {
                                     let current_progress = if lines.is_empty() { 0.0 } else { offset as f64 / lines.len() as f64 };
-                                    state.books.insert(book_path.clone(), Bookmark {
-                                        chapter: chapter_index,
-                                        progress: current_progress,
-                                    });
+                                    state.books.insert(book_path.clone(), Bookmark { chapter: chapter_index, progress: current_progress });
                                     save_state(&state);
                                     break;
                                 }
@@ -204,9 +262,8 @@ pub fn run(
                                 }
                                 
                                 KeyCode::Char('j') | KeyCode::Down => {
-                                    if offset + lines_per_page < lines.len() {
-                                        offset += 1;
-                                    } else if chapter_index + 1 < spine.len() {
+                                    if offset + lines_per_page < lines.len() { offset += 1; } 
+                                    else if chapter_index + 1 < spine.len() {
                                         chapter_index += 1;
                                         lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
                                         offset = 0;
@@ -214,9 +271,8 @@ pub fn run(
                                 }
                                 
                                 KeyCode::Char('k') | KeyCode::Up => {
-                                    if offset > 0 {
-                                        offset -= 1;
-                                    } else if chapter_index > 0 {
+                                    if offset > 0 { offset -= 1; } 
+                                    else if chapter_index > 0 {
                                         chapter_index -= 1;
                                         lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
                                         offset = if lines.len() > lines_per_page { lines.len() - lines_per_page } else { 0 };
@@ -242,7 +298,6 @@ pub fn run(
                                         offset = if lines.len() > lines_per_page { lines.len() - lines_per_page } else { 0 };
                                     }
                                 }
-                                
                                 _ => {}
                             }
                         }
@@ -253,18 +308,13 @@ pub fn run(
                 term_cols = new_cols;
                 term_rows = new_rows;
                 
-                dynamic_width = std::cmp::max(10, std::cmp::min(
-                    cfg.max_width, 
-                    (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right)
-                ));
+                dynamic_width = std::cmp::max(10, std::cmp::min(cfg.max_width, (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right)));
                 lines_per_page = (term_rows as usize).saturating_sub(footer_space);
                 
                 lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
                 offset = (current_progress * lines.len() as f64).floor() as usize;
                 
-                if offset >= lines.len() {
-                    offset = lines.len().saturating_sub(lines_per_page);
-                }
+                if offset >= lines.len() { offset = lines.len().saturating_sub(lines_per_page); }
             }
         }
     }

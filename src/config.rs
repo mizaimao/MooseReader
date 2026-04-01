@@ -26,7 +26,7 @@ impl Default for Config {
             margin_right: 4,
             show_footer: true,
             footer_align: Alignment::Center,
-            scroll_by_lines: 2, // Changed to 2 as requested
+            scroll_by_lines: 2,
         }
     }
 }
@@ -45,4 +45,11 @@ pub fn load_or_create_config() -> Config {
         let _ = std::fs::write(config_path, json);
     }
     default_config
+}
+
+pub fn save_config(cfg: &Config) {
+    let config_path = "reader_config.json";
+    if let Ok(json) = serde_json::to_string_pretty(cfg) {
+        let _ = std::fs::write(config_path, json);
+    }
 }
