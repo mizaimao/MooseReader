@@ -12,7 +12,6 @@ use crate::config::{Alignment, Config};
 use crate::epub::load_chapter;
 use crate::state::{save_state, Bookmark, State};
 
-// 1. The Foundation for all future popup panes
 #[derive(PartialEq)]
 enum AppMode {
     Reading,
@@ -37,7 +36,6 @@ pub fn run(
     let mut footer_space = if cfg.show_footer { 2 } else { 0 };
     let mut lines_per_page = (term_rows as usize).saturating_sub(footer_space);
 
-    // --- LOAD PERCENTAGE STATE ---
     let (mut chapter_index, progress) = if let Some(bookmark) = state.books.get(&book_path) {
         let safe_chapter = std::cmp::min(bookmark.chapter, spine.len().saturating_sub(1));
         (safe_chapter, bookmark.progress)
@@ -51,19 +49,17 @@ pub fn run(
     if offset >= lines.len() {
         offset = lines.len().saturating_sub(lines_per_page);
     }
-    // -----------------------------
 
-    // --- UI STATE VARIABLES ---
     let mut mode = AppMode::Reading;
-    let mut toc_cursor = chapter_index; // Where the highlight bar is
-    let mut toc_top = 0;                // For scrolling long chapter lists inside the box
+    let mut toc_cursor = chapter_index;
+    let mut toc_top = 0;
 
     let mut stdout = io::stdout();
     enable_raw_mode()?;
     execute!(stdout, Hide, Clear(ClearType::All))?;
 
     loop {
-        // --- 1. ALWAYS DRAW THE BACKGROUND (THE BOOK) ---
+        // --- 1. DRAW THE BACKGROUND ---
         execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
         
         let end = std::cmp::min(offset + lines_per_page, lines.len());
@@ -94,23 +90,28 @@ pub fn run(
             print!("{padding}{text}\r", padding = " ".repeat(padding_spaces), text = footer_text);
         }
 
-        // --- 2. DRAW THE OVERLAY PANES ---
+        // --- 2. DRAW OVERLAYS ---
         if mode == AppMode::TocMenu {
-            // Dynamically size the box based on terminal size
-            let box_width = std::cmp::max(40, std::cmp::min(70, term_cols.saturating_sub(10)));
+            let box_width_usize = std::cmp::max(30, std::cmp::min(70, dynamic_width.saturating_sub(4)));
+            let box_width = box_width_usize as u16;
             let box_height = std::cmp::max(10, std::cmp::min(25, term_rows.saturating_sub(4)));
             
-            // Center the box
-            let start_x = (term_cols - box_width) / 2;
-            let start_y = (term_rows - box_height) / 2;
+            let text_center_x = cfg.margin_left + (dynamic_width / 2);
+            let mut start_x = text_center_x.saturating_sub(box_width_usize / 2) as u16;
+            
+            if start_x + box_width > term_cols {
+                start_x = term_cols.saturating_sub(box_width);
+            }
+            
+            let start_y = term_rows.saturating_sub(box_height) / 2;
 
-            // Draw Top Border with Title
             execute!(stdout, MoveTo(start_x, start_y))?;
             let title = " Table of Contents ";
             let dashes = box_width as usize - 2 - title.len();
-            print!("╭{}{}╮", title, "─".repeat(dashes));
+            
+            // FIX: Added \x1b[1m (Bold) and \x1b[0m (Reset) directly to the print macro
+            print!("╭\x1b[1m{}\x1b[0m{}╮", title, "─".repeat(dashes));
 
-            // Calculate Scrolling Viewport for the Menu
             let visible_items = box_height as usize - 2;
             if toc_cursor < toc_top {
                 toc_top = toc_cursor;
@@ -118,7 +119,6 @@ pub fn run(
                 toc_top = toc_cursor - visible_items + 1;
             }
 
-            // Draw Menu Items
             let max_title_len = box_width as usize - 6;
             for i in 0..visible_items {
                 execute!(stdout, MoveTo(start_x, start_y + 1 + i as u16))?;
@@ -127,27 +127,22 @@ pub fn run(
                 if idx < spine.len() {
                     let mut chap_title = spine[idx].1.clone();
                     
-                    // Truncate long chapter names with an ellipsis
                     if chap_title.chars().count() > max_title_len {
                         chap_title = chap_title.chars().take(max_title_len - 3).collect::<String>() + "...";
                     }
 
-                    // Pad the string with spaces to overwrite the book text behind it
                     let padded_title = format!("{:<width$}", chap_title, width = max_title_len);
 
                     if idx == toc_cursor {
-                        // ANSI \x1b[7m inverts colors to highlight the selection
                         print!("│ \x1b[7m> {}\x1b[0m │", padded_title);
                     } else {
                         print!("│   {} │", padded_title);
                     }
                 } else {
-                    // Empty row padding
                     print!("│{}│", " ".repeat(box_width as usize - 2));
                 }
             }
 
-            // Draw Bottom Border
             execute!(stdout, MoveTo(start_x, start_y + box_height - 1))?;
             print!("╰{}╯", "─".repeat(box_width as usize - 2));
         }
@@ -159,32 +154,27 @@ pub fn run(
             if let Event::Key(key_event) = event::read()? {
                 if key_event.kind == KeyEventKind::Press {
                     
-                    // Route inputs based on the current App Mode
                     match mode {
                         AppMode::TocMenu => {
                             match key_event.code {
-                                // Close the menu
                                 KeyCode::Tab | KeyCode::Esc | KeyCode::Char('q') => {
                                     mode = AppMode::Reading;
                                 }
-                                // Navigate Down
                                 KeyCode::Char('j') | KeyCode::Down => {
                                     if toc_cursor + 1 < spine.len() {
                                         toc_cursor += 1;
                                     }
                                 }
-                                // Navigate Up
                                 KeyCode::Char('k') | KeyCode::Up => {
                                     if toc_cursor > 0 {
                                         toc_cursor -= 1;
                                     }
                                 }
-                                // Jump to Chapter
                                 KeyCode::Enter => {
                                     chapter_index = toc_cursor;
                                     lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
-                                    offset = 0; // Reset progress to top of new chapter
-                                    mode = AppMode::Reading; // Close menu
+                                    offset = 0; 
+                                    mode = AppMode::Reading; 
                                 }
                                 _ => {}
                             }
@@ -192,10 +182,9 @@ pub fn run(
 
                         AppMode::Reading => {
                             match key_event.code {
-                                // Open the Menu
                                 KeyCode::Tab => {
                                     mode = AppMode::TocMenu;
-                                    toc_cursor = chapter_index; // Snap highlight to current chapter
+                                    toc_cursor = chapter_index; 
                                 }
 
                                 KeyCode::Char('q') => {
