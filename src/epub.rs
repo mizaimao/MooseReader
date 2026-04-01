@@ -42,14 +42,15 @@ fn format_html_for_terminal(input: &str) -> String {
 
             match base_tag {
                 "h1" | "h2" | "h3" => output.push_str("\x1b[1m\x1e"),
-                "/h1" | "/h2" | "/h3" => output.push_str("\x1b[0m\n\n"),
+
+                // FIX: Changed from \x1b[0m to \x1b[22m to stop wiping the background color
+                "/h1" | "/h2" | "/h3" => output.push_str("\x1b[22m\n\n"),
 
                 "b" | "strong" => output.push_str("\x1b[1m"),
                 "/b" | "/strong" => output.push_str("\x1b[22m"),
                 "i" | "em" => output.push_str("\x1b[3m"),
                 "/i" | "/em" => output.push_str("\x1b[23m"),
 
-                // Emitting newlines for block elements
                 "p" | "div" | "/p" | "/div" | "br" | "br/" => output.push('\n'),
 
                 "img" | "image" => output.push_str("\n\x1b[2m[Image]\x1b[22m\n"),

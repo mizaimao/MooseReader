@@ -20,7 +20,11 @@ pub fn get_palette(theme: &Theme) -> Palette {
         Theme::Default => Palette {
             bg: Color::Reset,
             fg: Color::Reset,
-            accent: Color::Yellow,
+            accent: Color::Rgb {
+                r: 90,
+                g: 160,
+                b: 250,
+            },
             dim: Color::DarkGrey,
         },
         Theme::Sepia => Palette {
