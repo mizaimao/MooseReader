@@ -6,7 +6,7 @@ use crossterm::{
     event::{self, Event, KeyEventKind},
     execute,
     style::{SetBackgroundColor, SetForegroundColor},
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
 use std::fs::File;
 use std::io::{self, Write};
@@ -14,10 +14,14 @@ use zip::ZipArchive;
 
 use crate::config::Config;
 use crate::epub::load_chapter;
-use crate::state::{save_state, Bookmark, State};
+use crate::state::{Bookmark, State, save_state};
 
 #[derive(PartialEq)]
-pub enum AppMode { Reading, TocMenu, SettingsMenu }
+pub enum AppMode {
+    Reading,
+    TocMenu,
+    SettingsMenu,
+}
 
 pub struct AppState {
     pub mode: AppMode,
@@ -33,7 +37,11 @@ pub struct AppState {
 }
 
 pub fn run(
-    mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg: Config, mut state: State, book_path: String,
+    mut archive: ZipArchive<File>,
+    spine: Vec<(String, String)>,
+    mut cfg: Config,
+    mut state: State,
+    book_path: String,
 ) -> io::Result<()> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
@@ -41,7 +49,13 @@ pub fn run(
         mode: AppMode::Reading,
         chapter_index: 0,
         offset: 0,
-        dynamic_width: std::cmp::max(10, std::cmp::min(cfg.max_width, (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right))),
+        dynamic_width: std::cmp::max(
+            10,
+            std::cmp::min(
+                cfg.max_width,
+                (term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right),
+            ),
+        ),
         lines_per_page: (term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 }),
         toc_cursor: 0,
         toc_top: 0,
@@ -53,12 +67,21 @@ pub fn run(
     let progress = if let Some(bookmark) = state.books.get(&book_path) {
         app.chapter_index = std::cmp::min(bookmark.chapter, spine.len().saturating_sub(1));
         bookmark.progress
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     app.toc_cursor = app.chapter_index;
-    let mut lines = load_chapter(&mut archive, &spine[app.chapter_index].0, app.dynamic_width, cfg.margin_left);
+    let mut lines = load_chapter(
+        &mut archive,
+        &spine[app.chapter_index].0,
+        app.dynamic_width,
+        cfg.margin_left,
+    );
     app.offset = (progress * lines.len() as f64).floor() as usize;
-    if app.offset >= lines.len() { app.offset = lines.len().saturating_sub(app.lines_per_page); }
+    if app.offset >= lines.len() {
+        app.offset = lines.len().saturating_sub(app.lines_per_page);
+    }
 
     let mut stdout = io::stdout();
     enable_raw_mode()?;
@@ -68,17 +91,19 @@ pub fn run(
         // Grab the active color palette and flood-fill the background
         let palette = render::get_palette(&cfg.theme);
         execute!(
-            stdout, 
-            MoveTo(0, 0), 
-            SetBackgroundColor(palette.bg), 
-            SetForegroundColor(palette.fg), 
+            stdout,
+            MoveTo(0, 0),
+            SetBackgroundColor(palette.bg),
+            SetForegroundColor(palette.fg),
             Clear(ClearType::All)
         )?;
 
         // Pass the palette into the render functions
         render::draw_reading_view(&mut stdout, &app, &cfg, &lines, &spine, &palette)?;
         match app.mode {
-            AppMode::TocMenu => render::draw_toc_menu(&mut stdout, &mut app, &cfg, &spine, &palette)?,
+            AppMode::TocMenu => {
+                render::draw_toc_menu(&mut stdout, &mut app, &cfg, &spine, &palette)?
+            }
             AppMode::SettingsMenu => render::draw_settings_menu(&mut stdout, &app, &cfg, &palette)?,
             AppMode::Reading => {}
         }
@@ -88,19 +113,58 @@ pub fn run(
             if let Event::Key(key_event) = event::read()? {
                 if key_event.kind == KeyEventKind::Press {
                     let quit_requested = match app.mode {
-                        AppMode::Reading => input::handle_reading_input(key_event.code, &mut app, &mut cfg, &mut lines, &mut archive, &spine),
-                        AppMode::TocMenu => input::handle_toc_input(key_event.code, &mut app, &cfg, &mut lines, &mut archive, &spine),
-                        AppMode::SettingsMenu => input::handle_settings_input(key_event.code, &mut app, &mut cfg, &mut lines, &mut archive, &spine),
+                        AppMode::Reading => input::handle_reading_input(
+                            key_event.code,
+                            &mut app,
+                            &mut cfg,
+                            &mut lines,
+                            &mut archive,
+                            &spine,
+                        ),
+                        AppMode::TocMenu => input::handle_toc_input(
+                            key_event.code,
+                            &mut app,
+                            &cfg,
+                            &mut lines,
+                            &mut archive,
+                            &spine,
+                        ),
+                        AppMode::SettingsMenu => input::handle_settings_input(
+                            key_event.code,
+                            &mut app,
+                            &mut cfg,
+                            &mut lines,
+                            &mut archive,
+                            &spine,
+                        ),
                     };
                     if quit_requested {
-                        let current_progress = if lines.is_empty() { 0.0 } else { app.offset as f64 / lines.len() as f64 };
-                        state.books.insert(book_path.clone(), Bookmark { chapter: app.chapter_index, progress: current_progress });
+                        let current_progress = if lines.is_empty() {
+                            0.0
+                        } else {
+                            app.offset as f64 / lines.len() as f64
+                        };
+                        state.books.insert(
+                            book_path.clone(),
+                            Bookmark {
+                                chapter: app.chapter_index,
+                                progress: current_progress,
+                            },
+                        );
                         save_state(&state);
                         break;
                     }
                 }
             } else if let Event::Resize(new_cols, new_rows) = event::read()? {
-                input::handle_resize(new_cols, new_rows, &mut app, &cfg, &mut lines, &mut archive, &spine);
+                input::handle_resize(
+                    new_cols,
+                    new_rows,
+                    &mut app,
+                    &cfg,
+                    &mut lines,
+                    &mut archive,
+                    &spine,
+                );
             }
         }
     }
