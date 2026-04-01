@@ -2,7 +2,7 @@
 
 **A blazingly fast, ultra-lightweight terminal EPUB reader written in Rust.**
 
-MooseReader is a zero-distraction, keyboard-driven EPUB reader designed for the terminal. Built entirely from scratch on top of `crossterm`, it bypasses heavy TUI frameworks and web-rendering engines to deliver a fast reading experience with low memory profile.
+MooseReader is a zero-distraction, keyboard-controlled EPUB reader designed for the terminal. Built without heavy TUI frameworks or web-rendering engines to deliver a fast reading experience with low memory profile.
 
 ![MooseReader Screenshot](assets/moosereader_sc.png)
 
@@ -10,28 +10,22 @@ Dedicated to Donkey.
 
 ## ✨ Features
 
-* **Featherweight Footprint:** Idles at very low usage of memory (MBs). No headless browsers, no bloated DOM trees. 
-* **Live Layout Engine:** Dynamically adjust your reading width, left/right margins, and scroll speeds via an interactive TUI overlay. The text re-wraps instantly in the background.
-* **Multiple Curated Color Themes:** Beautiful, pre-built TrueColor profiles including Dracula, Nord, Solarized, Catppuccin, Gruvbox, and pure Terminal native.
-* **Vim-Native Navigation:** Keep your hands on the home row with full `h` `j` `k` `l` support.
-* **Smart State Persistence:** MooseReader remembers exactly where you left off. Using percentage-based bookmarking.
+* **Featherweight Footprint:** Very low usage of memory (only several MBs).
+* **Live Layout Engine:** Dynamically adjust your reading settings on the go.
+* **Multiple Themes:** Beautiful, pre-built TrueColor profiles including Dracula, Nord, Solarized, Catppuccin, Gruvbox, etc.
+* **Keyboard-Native Navigation:** Keep your hands on the home row with full `h` `j` `k` `l` support.
+* **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking.
 * **Interactive Table of Contents:** A pop-up TUI pane to seamlessly navigate chapters.
 * **Customizable Footer:** Toggle chapter titles, reading progress (chapter vs. overall), percentage read, and visual progress bars `[████░░░░]`. 
 
-## 🚀 Installation
-
+## 📖 Usage
 Ensure you have [Rust and Cargo](https://www.rust-lang.org/tools/install) installed on your machine.
 
-```bash
-git clone [https://github.com/YOUR_USERNAME/MooseReader.git](https://github.com/YOUR_USERNAME/MooseReader.git)
+Then clone and run!
+```
+git clone https://github.com/YOUR_USERNAME/MooseReader.git
 cd MooseReader
-cargo build --release
-```
-
-## 📖 Usage
-Simply pass the path of your EPUB file to the application:
-```
-cargo run -- MyBook.epub
+cargo run -- ./MyBook.epub
 ```
 
 ## ⌨️ Default Keybindings
