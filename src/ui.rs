@@ -10,8 +10,16 @@ use zip::ZipArchive;
 
 use crate::config::{Alignment, Config};
 use crate::epub::load_chapter;
+use crate::state::{save_state, Bookmark, State};
 
-pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg: Config) -> io::Result<()> {
+pub fn run(
+    mut archive: ZipArchive<File>, 
+    spine: Vec<(String, String)>, 
+    mut cfg: Config, 
+    mut state: State, 
+    book_path: String
+) -> io::Result<()> {
+    
     let (mut term_cols, mut term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
     
     let mut dynamic_width = std::cmp::max(10, std::cmp::min(
@@ -22,9 +30,24 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
     let mut footer_space = if cfg.show_footer { 2 } else { 0 };
     let mut lines_per_page = (term_rows as usize).saturating_sub(footer_space);
 
-    let mut chapter_index = 0;
+    // --- STATE LOADING ---
+    // Check if we have a saved bookmark for this specific book
+    let (mut chapter_index, mut offset) = if let Some(bookmark) = state.books.get(&book_path) {
+        // Ensure we don't accidentally load a chapter that doesn't exist anymore
+        let safe_chapter = std::cmp::min(bookmark.chapter, spine.len().saturating_sub(1));
+        (safe_chapter, bookmark.offset)
+    } else {
+        (0, 0) // First time opening this book
+    };
+
     let mut lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
-    let mut offset = 0;
+    
+    // Safety check: if the terminal was resized while the app was closed, 
+    // the saved offset might be past the end of the newly wrapped text.
+    if offset >= lines.len() {
+        offset = lines.len().saturating_sub(lines_per_page);
+    }
+    // ---------------------
 
     let mut stdout = io::stdout();
     enable_raw_mode()?;
@@ -34,8 +57,6 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
         execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
         
         let end = std::cmp::min(offset + lines_per_page, lines.len());
-        
-        // FIX: Explicitly map the cursor to each row and use `print!` to avoid auto-scrolling
         for (row_idx, i) in (offset..end).enumerate() {
             execute!(stdout, MoveTo(0, row_idx as u16))?;
             print!("{}\r", lines[i]);
@@ -80,16 +101,26 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
             if let Event::Key(key_event) = event::read()? {
                 if key_event.kind == KeyEventKind::Press {
                     match key_event.code {
-                        KeyCode::Char('q') => break,
                         
-                        // Toggle Footer
+                        KeyCode::Char('q') => {
+                            // --- STATE SAVING ---
+                            // Update the dictionary with our current location
+                            state.books.insert(book_path.clone(), Bookmark {
+                                chapter: chapter_index,
+                                offset,
+                            });
+                            // Write the dictionary to the disk
+                            save_state(&state);
+                            // --------------------
+                            break;
+                        }
+                        
                         KeyCode::Char('F') | KeyCode::Char('f') => {
                             cfg.show_footer = !cfg.show_footer;
                             footer_space = if cfg.show_footer { 2 } else { 0 };
                             lines_per_page = (term_rows as usize).saturating_sub(footer_space);
                         }
                         
-                        // --- Single Line Down (Vim 'j' or Down Arrow) ---
                         KeyCode::Char('j') | KeyCode::Down => {
                             if offset + lines_per_page < lines.len() {
                                 offset += 1;
@@ -100,7 +131,6 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
                             }
                         }
                         
-                        // --- Single Line Up (Vim 'k' or Up Arrow) ---
                         KeyCode::Char('k') | KeyCode::Up => {
                             if offset > 0 {
                                 offset -= 1;
@@ -115,7 +145,6 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
                             }
                         }
 
-                        // --- Multi-Line Down / Fast Forward (Vim 'l', Right Arrow, or Space) ---
                         KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right | KeyCode::Char(' ') => {
                             if offset + lines_per_page < lines.len() {
                                 offset = std::cmp::min(offset + cfg.scroll_by_lines, lines.len().saturating_sub(lines_per_page));
@@ -126,7 +155,6 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
                             }
                         }
 
-                        // --- Multi-Line Up / Rewind (Vim 'h' or Left Arrow) ---
                         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
                             if offset > 0 {
                                 offset = offset.saturating_sub(cfg.scroll_by_lines);
@@ -155,7 +183,11 @@ pub fn run(mut archive: ZipArchive<File>, spine: Vec<(String, String)>, mut cfg:
                 lines_per_page = (term_rows as usize).saturating_sub(footer_space);
                 
                 lines = load_chapter(&mut archive, &spine[chapter_index].0, dynamic_width, cfg.margin_left);
-                offset = 0; 
+                
+                // Keep offset in bounds if the terminal was resized to be much wider (meaning fewer lines total)
+                if offset >= lines.len() {
+                    offset = lines.len().saturating_sub(lines_per_page);
+                }
             }
         }
     }
