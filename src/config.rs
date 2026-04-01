@@ -14,6 +14,7 @@ pub struct Config {
     pub margin_left: usize,
     pub margin_right: usize,
     pub show_footer: bool,
+    pub show_progress_bar: bool, // <-- NEW
     pub footer_align: Alignment,
     pub scroll_by_lines: usize,
 }
@@ -25,6 +26,7 @@ impl Default for Config {
             margin_left: 4,
             margin_right: 4,
             show_footer: true,
+            show_progress_bar: true, // <-- NEW
             footer_align: Alignment::Center,
             scroll_by_lines: 2,
         }
