@@ -83,22 +83,27 @@ pub fn handle_settings_input(
             app.mode = AppMode::Reading;
         }
         
-        KeyCode::Char('j') | KeyCode::Down => app.settings_cursor = (app.settings_cursor + 1) % 10,
-        KeyCode::Char('k') | KeyCode::Up => app.settings_cursor = if app.settings_cursor == 0 { 9 } else { app.settings_cursor - 1 },
+        KeyCode::Char('j') | KeyCode::Down => app.settings_cursor = (app.settings_cursor + 1) % 12,
+        KeyCode::Char('k') | KeyCode::Up => app.settings_cursor = if app.settings_cursor == 0 { 11 } else { app.settings_cursor - 1 },
 
         KeyCode::Char('h') | KeyCode::Left => {
             let mut text_changed = false;
             match app.settings_cursor {
+                // --- Main UI ---
                 0 => if cfg.max_width > 20 { cfg.max_width -= 1; text_changed = true; },
                 1 => if cfg.margin_left > 0 { cfg.margin_left -= 1; text_changed = true; },
                 2 => if cfg.margin_right > 0 { cfg.margin_right -= 1; text_changed = true; },
                 3 => if cfg.scroll_by_lines > 1 { cfg.scroll_by_lines -= 1; },
+                
+                // --- Footer ---
                 4 => cfg.show_footer = !cfg.show_footer,
                 5 => cfg.footer_align = match cfg.footer_align { Alignment::Left => Alignment::Right, Alignment::Center => Alignment::Left, Alignment::Right => Alignment::Center },
                 6 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                7 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                7 => cfg.progress_mode = match cfg.progress_mode { ProgressMode::Chapter => ProgressMode::Overall, ProgressMode::Overall => ProgressMode::Chapter },
                 8 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                9 => cfg.progress_mode = match cfg.progress_mode { ProgressMode::Chapter => ProgressMode::Overall, ProgressMode::Overall => ProgressMode::Chapter },
+                9 => if cfg.progress_bar_length > 5 { cfg.progress_bar_length -= 1; }, // Min length 5
+                10 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                11 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed { update_layout_live(app, cfg, lines, archive, spine); }
@@ -107,16 +112,21 @@ pub fn handle_settings_input(
         KeyCode::Char('l') | KeyCode::Right => {
             let mut text_changed = false;
             match app.settings_cursor {
+                // --- Main UI ---
                 0 => if cfg.max_width < 200 { cfg.max_width += 1; text_changed = true; },
                 1 => if cfg.margin_left < 40 { cfg.margin_left += 1; text_changed = true; },
                 2 => if cfg.margin_right < 40 { cfg.margin_right += 1; text_changed = true; },
                 3 => if cfg.scroll_by_lines < 50 { cfg.scroll_by_lines += 1; },
+                
+                // --- Footer ---
                 4 => cfg.show_footer = !cfg.show_footer,
                 5 => cfg.footer_align = match cfg.footer_align { Alignment::Left => Alignment::Center, Alignment::Center => Alignment::Right, Alignment::Right => Alignment::Left },
                 6 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                7 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                7 => cfg.progress_mode = match cfg.progress_mode { ProgressMode::Chapter => ProgressMode::Overall, ProgressMode::Overall => ProgressMode::Chapter },
                 8 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                9 => cfg.progress_mode = match cfg.progress_mode { ProgressMode::Chapter => ProgressMode::Overall, ProgressMode::Overall => ProgressMode::Chapter },
+                9 => if cfg.progress_bar_length < 100 { cfg.progress_bar_length += 1; }, // Max length 100
+                10 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                11 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed { update_layout_live(app, cfg, lines, archive, spine); }

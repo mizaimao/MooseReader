@@ -26,6 +26,8 @@ pub struct Config {
     pub show_chapter_title: bool,
     pub show_chapter_location: bool,
     pub show_progress_bar: bool,
+    pub show_progress_percentage: bool, // NEW
+    pub progress_bar_length: usize,     // NEW
     pub progress_mode: ProgressMode,
 }
 
@@ -41,6 +43,8 @@ impl Default for Config {
             show_chapter_title: true,
             show_chapter_location: true,
             show_progress_bar: true,
+            show_progress_percentage: true,
+            progress_bar_length: 10,
             progress_mode: ProgressMode::Overall,
         }
     }
