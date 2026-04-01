@@ -26,7 +26,7 @@ fn main() -> std::io::Result<()> {
 
     let file = File::open(raw_path)?;
     let mut archive = ZipArchive::new(file)?;
-    
+
     let spine = epub::get_epub_spine(&mut archive).expect("Failed to parse EPUB spine.");
     if spine.is_empty() {
         println!("No chapters found in EPUB.");

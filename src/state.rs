@@ -15,13 +15,13 @@ pub struct State {
 
 pub fn load_state() -> State {
     let state_path = "bookmarks.json";
-    
+
     if let Ok(file_content) = fs::read_to_string(state_path) {
         if let Ok(state) = serde_json::from_str(&file_content) {
             return state;
         }
     }
-    
+
     State::default()
 }
 
