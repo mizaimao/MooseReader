@@ -4,7 +4,7 @@
 
 MooseReader is a zero-distraction, keyboard-driven EPUB reader designed for the terminal. Built entirely from scratch on top of `crossterm`, it bypasses heavy TUI frameworks and web-rendering engines to deliver a fast reading experience with low memory profile.
 
-![MooseReader Screenshot](link-to-your-screenshot.png)
+![MooseReader Screenshot](assets/moosereader_sc.png)
 
 Dedicated to Donkey.
 
