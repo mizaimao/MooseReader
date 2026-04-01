@@ -1,7 +1,7 @@
 use crossterm::{cursor::MoveTo, execute};
 use std::io::{self, Write};
 
-use crate::config::{Alignment, Config};
+use crate::config::{Alignment, Config, ProgressMode};
 use super::AppState;
 
 pub fn draw_reading_view(stdout: &mut io::Stdout, app: &AppState, cfg: &Config, lines: &[String], spine: &[(String, String)]) -> io::Result<()> {
@@ -12,29 +12,41 @@ pub fn draw_reading_view(stdout: &mut io::Stdout, app: &AppState, cfg: &Config, 
     }
 
     if cfg.show_footer {
-        let footer_text = if cfg.show_progress_bar {
-            // Calculate exact overall book progress
-            let chap_prog = if lines.is_empty() { 0.0 } else { app.offset as f64 / lines.len() as f64 };
-            let overall_prog = ((app.chapter_index as f64 + chap_prog) / spine.len() as f64) * 100.0;
-            let overall_prog = overall_prog.clamp(0.0, 100.0);
-            
-            let filled = std::cmp::min(10, (overall_prog / 10.0).round() as usize);
-            let bar = format!("[{}{}] {:.0}%", "█".repeat(filled), "░".repeat(10 - filled), overall_prog);
-            
-            format!("--- {} {} ---", spine[app.chapter_index].1, bar)
-        } else {
-            // Classic fraction format
-            format!("--- {} ({}/{}) ---", spine[app.chapter_index].1, app.chapter_index + 1, spine.len())
-        };
+        // --- DYNAMIC FOOTER BUILDER ---
+        let mut footer_parts = Vec::new();
 
-        let layout_width = std::cmp::min(cfg.max_width, (app.term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right));
-        let padding_spaces = match cfg.footer_align {
-            Alignment::Left => cfg.margin_left,
-            Alignment::Center => if layout_width > footer_text.len() { cfg.margin_left + ((layout_width - footer_text.len()) / 2) } else { cfg.margin_left },
-            Alignment::Right => if layout_width > footer_text.len() { cfg.margin_left + (layout_width - footer_text.len()) } else { cfg.margin_left },
-        };
-        execute!(stdout, MoveTo(0, app.term_rows - 1))?;
-        print!("{padding}{text}\r", padding = " ".repeat(padding_spaces), text = footer_text);
+        if cfg.show_chapter_title {
+            footer_parts.push(spine[app.chapter_index].1.clone());
+        }
+
+        if cfg.show_progress_bar {
+            let chap_prog = if lines.is_empty() { 0.0 } else { app.offset as f64 / lines.len() as f64 };
+            let prog_val = match cfg.progress_mode {
+                ProgressMode::Chapter => chap_prog * 100.0,
+                ProgressMode::Overall => ((app.chapter_index as f64 + chap_prog) / spine.len() as f64) * 100.0,
+            }.clamp(0.0, 100.0);
+            
+            let filled = std::cmp::min(10, (prog_val / 10.0).round() as usize);
+            footer_parts.push(format!("[{}{}] {:.0}%", "█".repeat(filled), "░".repeat(10 - filled), prog_val));
+        }
+
+        if cfg.show_chapter_location {
+            footer_parts.push(format!("({}/{})", app.chapter_index + 1, spine.len()));
+        }
+
+        // Only draw the footer if there is actually something enabled inside it
+        if !footer_parts.is_empty() {
+            let footer_text = format!("--- {} ---", footer_parts.join(" "));
+
+            let layout_width = std::cmp::min(cfg.max_width, (app.term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right));
+            let padding_spaces = match cfg.footer_align {
+                Alignment::Left => cfg.margin_left,
+                Alignment::Center => if layout_width > footer_text.len() { cfg.margin_left + ((layout_width - footer_text.len()) / 2) } else { cfg.margin_left },
+                Alignment::Right => if layout_width > footer_text.len() { cfg.margin_left + (layout_width - footer_text.len()) } else { cfg.margin_left },
+            };
+            execute!(stdout, MoveTo(0, app.term_rows - 1))?;
+            print!("{padding}{text}\r", padding = " ".repeat(padding_spaces), text = footer_text);
+        }
     }
     Ok(())
 }
@@ -81,7 +93,7 @@ pub fn draw_toc_menu(stdout: &mut io::Stdout, app: &mut AppState, cfg: &Config, 
 
 pub fn draw_settings_menu(stdout: &mut io::Stdout, app: &AppState, cfg: &Config) -> io::Result<()> {
     let box_width: u16 = 36;
-    let box_height: u16 = 11; // Increased to fit 7 items
+    let box_height: u16 = 14; // Expanded to fit 10 settings
 
     let text_center_x = cfg.margin_left + (app.dynamic_width / 2);
     let mut start_x = text_center_x.saturating_sub((box_width / 2) as usize) as u16;
@@ -92,40 +104,45 @@ pub fn draw_settings_menu(stdout: &mut io::Stdout, app: &AppState, cfg: &Config)
     execute!(stdout, MoveTo(start_x, start_y))?;
     print!("╭\x1b[1m Settings \x1b[0m{}╮", "─".repeat(box_width as usize - 12));
 
-    let labels = ["Max Width", "Margin Left", "Margin Right", "Show Footer", "Progress Bar", "Footer Align", "Scroll Lines"];
+    let labels = [
+        "Max Width", "Margin Left", "Margin Right", "Scroll Lines", 
+        "Show Footer", "Footer Align", "Chapter Title", "Chapter Loc", 
+        "Progress Bar", "Progress Mode"
+    ];
 
     let align_str = match cfg.footer_align { Alignment::Left => "Left", Alignment::Center => "Center", Alignment::Right => "Right" };
-    let footer_str = if cfg.show_footer { "On" } else { "Off" };
-    let bar_str = if cfg.show_progress_bar { "On" } else { "Off" };
+    let prog_mode_str = match cfg.progress_mode { ProgressMode::Chapter => "Chapter", ProgressMode::Overall => "Overall" };
     
     let values = [
         cfg.max_width.to_string(),
         cfg.margin_left.to_string(),
         cfg.margin_right.to_string(),
-        footer_str.to_string(),
-        bar_str.to_string(),
-        align_str.to_string(),
         cfg.scroll_by_lines.to_string(),
+        if cfg.show_footer { "On".to_string() } else { "Off".to_string() },
+        align_str.to_string(),
+        if cfg.show_chapter_title { "On".to_string() } else { "Off".to_string() },
+        if cfg.show_chapter_location { "On".to_string() } else { "Off".to_string() },
+        if cfg.show_progress_bar { "On".to_string() } else { "Off".to_string() },
+        prog_mode_str.to_string(),
     ];
 
     execute!(stdout, MoveTo(start_x, start_y + 1))?;
     print!("│{}│", " ".repeat(box_width as usize - 2));
 
-    // Loop through all 7 items
-    for i in 0..7 {
+    for i in 0..10 {
         execute!(stdout, MoveTo(start_x, start_y + 2 + i as u16))?;
         if app.settings_cursor == i {
-            let content = format!("{:<14} < {:>6} >", labels[i], values[i]);
+            let content = format!("{:<15} < {:>7} >", labels[i], values[i]);
             print!("│\x1b[7m{:^34}\x1b[0m│", content);
         } else {
-            let content = format!("{:<14}   {:>6}  ", labels[i], values[i]);
+            let content = format!("{:<15}   {:>7}  ", labels[i], values[i]);
             print!("│{:^34}│", content);
         }
     }
 
-    execute!(stdout, MoveTo(start_x, start_y + 9))?;
+    execute!(stdout, MoveTo(start_x, start_y + 12))?;
     print!("│{}│", " ".repeat(box_width as usize - 2));
-    execute!(stdout, MoveTo(start_x, start_y + 10))?;
+    execute!(stdout, MoveTo(start_x, start_y + 13))?;
     print!("╰{}╯", "─".repeat(box_width as usize - 2));
     Ok(())
 }

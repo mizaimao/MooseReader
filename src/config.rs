@@ -8,15 +8,25 @@ pub enum Alignment {
     Right,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressMode {
+    Chapter,
+    Overall,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub max_width: usize,
     pub margin_left: usize,
     pub margin_right: usize,
-    pub show_footer: bool,
-    pub show_progress_bar: bool, // <-- NEW
-    pub footer_align: Alignment,
     pub scroll_by_lines: usize,
+    pub show_footer: bool,
+    pub footer_align: Alignment,
+    pub show_chapter_title: bool,
+    pub show_chapter_location: bool,
+    pub show_progress_bar: bool,
+    pub progress_mode: ProgressMode,
 }
 
 impl Default for Config {
@@ -25,10 +35,13 @@ impl Default for Config {
             max_width: 80,
             margin_left: 4,
             margin_right: 4,
-            show_footer: true,
-            show_progress_bar: true, // <-- NEW
-            footer_align: Alignment::Center,
             scroll_by_lines: 2,
+            show_footer: true,
+            footer_align: Alignment::Center,
+            show_chapter_title: true,
+            show_chapter_location: true,
+            show_progress_bar: true,
+            progress_mode: ProgressMode::Overall,
         }
     }
 }
