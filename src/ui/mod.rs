@@ -110,8 +110,9 @@ pub fn run(
         stdout.flush()?;
 
         if event::poll(std::time::Duration::from_millis(500))? {
-            if let Event::Key(key_event) = event::read()? {
-                if key_event.kind == KeyEventKind::Press {
+            // Read exactly one event per poll; a second read() would block and drop this one
+            match event::read()? {
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     let quit_requested = match app.mode {
                         AppMode::Reading => input::handle_reading_input(
                             key_event.code,
@@ -155,16 +156,18 @@ pub fn run(
                         break;
                     }
                 }
-            } else if let Event::Resize(new_cols, new_rows) = event::read()? {
-                input::handle_resize(
-                    new_cols,
-                    new_rows,
-                    &mut app,
-                    &cfg,
-                    &mut lines,
-                    &mut archive,
-                    &spine,
-                );
+                Event::Resize(new_cols, new_rows) => {
+                    input::handle_resize(
+                        new_cols,
+                        new_rows,
+                        &mut app,
+                        &cfg,
+                        &mut lines,
+                        &mut archive,
+                        &spine,
+                    );
+                }
+                _ => {}
             }
         }
     }
