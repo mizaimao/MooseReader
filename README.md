@@ -14,7 +14,7 @@ Dedicated to Donkey.
 * **Live Layout Engine:** Dynamically adjust your reading settings on the go.
 * **Multiple Themes:** Beautiful, pre-built TrueColor profiles including Dracula, Nord, Solarized, Catppuccin, Gruvbox, etc.
 * **Keyboard-Native Navigation:** Keep your hands on the home row with full `h` `j` `k` `l` support.
-* **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking.
+* **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking, saved automatically as you read.
 * **Interactive Table of Contents:** A pop-up TUI pane to seamlessly navigate chapters.
 * **Customizable Footer:** Toggle chapter titles, reading progress (chapter vs. overall), percentage read, and visual progress bars `[████░░░░]`. 
 
@@ -23,7 +23,7 @@ Ensure you have [Rust and Cargo](https://www.rust-lang.org/tools/install) instal
 
 Then clone and run!
 ```
-git clone https://github.com/YOUR_USERNAME/MooseReader.git
+git clone https://github.com/mizaimao/MooseReader.git
 cd MooseReader
 cargo run -- ./MyBook.epub
 ```
@@ -39,9 +39,11 @@ cargo run -- ./MyBook.epub
 |         S         |       Open Settings Menu       |
 |         F         |    Toggle Footer visibility    |
 |       Enter       | Select Chapter / Save Settings |
-|         Q         |     Save progress and Quit     |
+|     Q / Ctrl-C    |     Save progress and Quit     |
 
 
 ## 🛠️ Configuration
-MooseReader automatically creates a reader_config.json file in its cloned directory. It's possible to edit it manually, or simply use the in-program Settings (hotkey: S) menu to change them on the fly. Bookmarks are saved to a local bookmarks.json file.
+MooseReader automatically creates its settings file at `~/.config/moosereader/config.json`. It's possible to edit it manually, or simply use the in-program Settings (hotkey: S) menu to change them on the fly. Bookmarks are saved to `~/.local/state/moosereader/bookmarks.json`, a moment after you stop scrolling and again when you quit.
+
+Both follow the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) convention, so `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` are respected when set. A `reader_config.json` or `bookmarks.json` left in the folder you launch from by earlier versions is picked up automatically on first run.
 
