@@ -3,6 +3,7 @@ mod epub;
 mod paths;
 mod state; // <-- Register our new state module
 mod ui;
+mod width;
 
 use std::env;
 use std::fs::File;

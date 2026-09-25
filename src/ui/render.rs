@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 use super::AppState;
 use crate::config::{Alignment, Config, ProgressMode, Theme};
+use crate::width;
 
 pub struct Palette {
     pub bg: Color,
@@ -283,8 +284,22 @@ pub fn draw_reading_view(
         }
 
         if !footer_parts.is_empty() {
-            let footer_text = format!("--- {} ---", footer_parts.join(" "));
-            let footer_len = footer_text.chars().count();
+            // The footer must fit on its row; a longer one wraps and scrolls the page up
+            let max_len = (app.term_cols as usize).saturating_sub(cfg.margin_left);
+            let compose = |parts: &[String]| format!("--- {} ---", parts.join(" "));
+            let mut footer_text = compose(&footer_parts);
+            if width::width(&footer_text) > max_len && cfg.show_chapter_title {
+                // Shorten the chapter title first; the numbers are what the footer is for
+                let overflow = width::width(&footer_text) - max_len;
+                let room = width::width(&footer_parts[0]).saturating_sub(overflow);
+                footer_parts[0] = width::truncate(&footer_parts[0], room);
+                if footer_parts[0].is_empty() {
+                    footer_parts.remove(0);
+                }
+                footer_text = compose(&footer_parts);
+            }
+            footer_text = width::truncate(&footer_text, max_len);
+            let footer_len = width::width(&footer_text);
 
             let layout_width = std::cmp::min(
                 cfg.max_width,
@@ -352,8 +367,8 @@ pub fn draw_toc_menu(
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    let title = " Table of Contents ";
-    let dashes = box_width as usize - 2 - title.len();
+    let title = width::truncate(" Table of Contents ", box_width_usize - 2);
+    let dashes = (box_width_usize - 2).saturating_sub(width::width(&title));
     write!(stdout, "╭")?;
     queue!(stdout, SetAttribute(Attribute::Bold))?;
     write!(stdout, "{}", title)?;
@@ -378,15 +393,8 @@ pub fn draw_toc_menu(
         let idx = app.toc_top + i;
 
         if idx < spine.len() {
-            let mut chap_title = spine[idx].1.clone();
-            if chap_title.chars().count() > max_title_len {
-                chap_title = chap_title
-                    .chars()
-                    .take(max_title_len - 3)
-                    .collect::<String>()
-                    + "...";
-            }
-            let padded = format!("{:<width$}", chap_title, width = max_title_len);
+            let chap_title = width::truncate(&spine[idx].1, max_title_len);
+            let padded = width::pad_right(&chap_title, max_title_len);
 
             if idx == app.toc_cursor {
                 queue!(
@@ -438,14 +446,19 @@ pub fn draw_settings_menu(
     )?;
     write!(stdout, "╭")?;
     queue!(stdout, SetAttribute(Attribute::Bold))?;
-    write!(stdout, " Settings ")?;
+    let title = width::truncate(" Settings ", box_width as usize - 2);
+    write!(stdout, "{}", title)?;
     queue!(
         stdout,
         SetAttribute(Attribute::Reset),
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    write!(stdout, "{}╮", "─".repeat(box_width as usize - 12))?;
+    write!(
+        stdout,
+        "{}╮",
+        "─".repeat((box_width as usize - 2).saturating_sub(width::width(&title)))
+    )?;
 
     let labels = [
         "Max Width",
@@ -529,27 +542,29 @@ pub fn draw_settings_menu(
     ];
 
     let inner_pad = " ".repeat(box_width as usize - 2);
+    let label = |i: usize| width::pad_right(&width::truncate(labels[i], 15), 15);
+    let value = |i: usize| width::pad_left(&width::truncate(&values[i], 10), 7);
 
     queue!(stdout, MoveTo(start_x, start_y + 1))?;
     write!(stdout, "│{}│", inner_pad)?;
     queue!(stdout, MoveTo(start_x, start_y + 2))?;
     write!(stdout, "│")?;
     queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(stdout, "{:^34}", "--- Main UI ---")?;
+    write!(stdout, "{}", width::center("--- Main UI ---", 34))?;
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
     for i in 0..5 {
         queue!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
         if app.settings_cursor == i {
-            let content = format!("{:<15} < {:>7} >", labels[i], values[i]);
+            let content = format!("{} < {} >", label(i), value(i));
             write!(stdout, "│")?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.accent),
                 SetForegroundColor(pal.bg)
             )?;
-            write!(stdout, "{:^34}", content)?;
+            write!(stdout, "{}", width::center(&content, 34))?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.bg),
@@ -559,11 +574,8 @@ pub fn draw_settings_menu(
         } else {
             write!(stdout, "│")?;
             queue!(stdout, SetForegroundColor(pal.fg))?;
-            write!(
-                stdout,
-                "{:^34}",
-                format!("{:<15}   {:>7}  ", labels[i], values[i])
-            )?;
+            let content = format!("{}   {}  ", label(i), value(i));
+            write!(stdout, "{}", width::center(&content, 34))?;
             queue!(stdout, SetForegroundColor(pal.accent))?;
             write!(stdout, "│")?;
         }
@@ -574,21 +586,21 @@ pub fn draw_settings_menu(
     queue!(stdout, MoveTo(start_x, start_y + 9))?;
     write!(stdout, "│")?;
     queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(stdout, "{:^34}", "--- Footer ---")?;
+    write!(stdout, "{}", width::center("--- Footer ---", 34))?;
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
     for i in 5..14 {
         queue!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
         if app.settings_cursor == i {
-            let content = format!("{:<15} < {:>7} >", labels[i], values[i]);
+            let content = format!("{} < {} >", label(i), value(i));
             write!(stdout, "│")?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.accent),
                 SetForegroundColor(pal.bg)
             )?;
-            write!(stdout, "{:^34}", content)?;
+            write!(stdout, "{}", width::center(&content, 34))?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.bg),
@@ -598,11 +610,8 @@ pub fn draw_settings_menu(
         } else {
             write!(stdout, "│")?;
             queue!(stdout, SetForegroundColor(pal.fg))?;
-            write!(
-                stdout,
-                "{:^34}",
-                format!("{:<15}   {:>7}  ", labels[i], values[i])
-            )?;
+            let content = format!("{}   {}  ", label(i), value(i));
+            write!(stdout, "{}", width::center(&content, 34))?;
             queue!(stdout, SetForegroundColor(pal.accent))?;
             write!(stdout, "│")?;
         }
