@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Packs unpacked EPUB folders (as Apple Books keeps them, or as unzipped by
+# hand) into standard .epub files.
+#
+# The EPUB container format (OCF) is a zip whose first entry is the file
+# "mimetype", stored uncompressed and without extra fields, so a reader can
+# tell what the file is from its first bytes. Everything else is compressed.
+#
+# Usage: tools/pack-epub [-f] [-q] [-o OUTPUT.epub] FOLDER...
+#   -o  where to write the book (one folder only). By default it goes next to
+#       the folder under the folder's name, with " (packed)" added when the
+#       folder is itself named *.epub, as Apple Books folders are.
+#   -f  replace an existing file
+#   -q  print nothing unless something goes wrong
+
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: tools/pack-epub [-f] [-q] [-o OUTPUT.epub] FOLDER...
+  -o  where to write the book (one folder only); by default next to the folder
+  -f  replace an existing file
+  -q  print nothing unless something goes wrong
+EOF
+    exit "${1:-2}"
+}
+
+output="" force=false quiet=false
+while getopts "o:fqh" opt; do
+    case $opt in
+        o) output=$OPTARG ;;
+        f) force=true ;;
+        q) quiet=true ;;
+        h) usage 0 ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+[[ $# -ge 1 ]] || usage
+[[ -z $output || $# -eq 1 ]] || { echo "pack-epub: -o takes one folder at a time" >&2; exit 2; }
+command -v zip >/dev/null || { echo "pack-epub: needs the zip command" >&2; exit 1; }
+
+failed=0
+for folder in "$@"; do
+    folder=${folder%/}
+    if [[ ! -d $folder ]]; then
+        echo "pack-epub: $folder is not a folder" >&2; failed=1; continue
+    fi
+    if [[ ! -f $folder/META-INF/container.xml ]]; then
+        echo "pack-epub: $folder has no META-INF/container.xml, so it is not an EPUB folder" >&2
+        failed=1; continue
+    fi
+
+    out=$output
+    if [[ -z $out ]]; then
+        name=$(basename "$folder")
+        out="$(dirname "$folder")/${name%.[eE][pP][uU][bB]}.epub"
+        [[ -d $out ]] && out="${out%.epub} (packed).epub"
+    fi
+    if [[ -e $out && $force == false ]]; then
+        echo "pack-epub: $out already exists (use -f to replace it)" >&2; failed=1; continue
+    fi
+
+    # Built beside the result and renamed into place, so a failure leaves no half-written book
+    out_dir=$(cd "$(dirname "$out")" && pwd)
+    partial="$out_dir/.$(basename "$out").partial"
+    rm -f "$partial"
+    if [[ -f $folder/mimetype ]]; then
+        (cd "$folder" && zip -q -X -0 "$partial" mimetype)
+    else
+        scratch=$(mktemp -d "$out_dir/.pack-epub.XXXXXX")
+        printf 'application/epub+zip' > "$scratch/mimetype"
+        (cd "$scratch" && zip -q -X -0 "$partial" mimetype)
+        rm -rf "$scratch"
+    fi
+    (cd "$folder" && zip -q -X -r -9 -D "$partial" . -x mimetype -x '*.DS_Store' -x '__MACOSX/*')
+    mv -f "$partial" "$out"
+
+    $quiet || echo "Packed $folder -> $out ($(zipinfo -1 "$out" | wc -l | tr -d ' ') files)"
+done
+exit $failed
