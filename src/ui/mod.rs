@@ -176,11 +176,14 @@ pub fn run(
             queue!(
                 frame,
                 BeginSynchronizedUpdate,
-                MoveTo(0, 0),
                 SetBackgroundColor(palette.bg),
-                SetForegroundColor(palette.fg),
-                Clear(ClearType::All)
+                SetForegroundColor(palette.fg)
             )?;
+            // Erased row by row: a full-screen erase (ED 2) makes Ghostty free every
+            // picture not on screen at that moment, including the ones sent for reuse
+            for row in 0..app.term_rows {
+                queue!(frame, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            }
 
             // Pass the palette into the render functions
             render::draw_reading_view(&mut frame, &app, &cfg, &lines, &spine, &palette)?;
