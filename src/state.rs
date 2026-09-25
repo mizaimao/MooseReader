@@ -17,10 +17,10 @@ pub struct State {
 pub fn load_state() -> State {
     let state_path = paths::bookmarks_file();
 
-    if let Some(file_content) = paths::read_with_legacy(&state_path, "bookmarks.json") {
-        if let Ok(state) = serde_json::from_str(&file_content) {
-            return state;
-        }
+    if let Some(file_content) = paths::read_with_legacy(&state_path, "bookmarks.json")
+        && let Ok(state) = serde_json::from_str(&file_content)
+    {
+        return state;
     }
 
     State::default()

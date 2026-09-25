@@ -509,12 +509,12 @@ fn ncx_titles<R: Read + Seek>(
             .descendants()
             .find(|n| n.tag_name().name() == "content");
 
-        if let (Some(t), Some(c)) = (text_node, content_node) {
-            if let (Some(text), Some(src)) = (t.text(), c.attribute("src")) {
-                titles
-                    .entry(resolve_href(ncx_path, src))
-                    .or_insert_with(|| text.trim().to_string());
-            }
+        if let (Some(t), Some(c)) = (text_node, content_node)
+            && let (Some(text), Some(src)) = (t.text(), c.attribute("src"))
+        {
+            titles
+                .entry(resolve_href(ncx_path, src))
+                .or_insert_with(|| text.trim().to_string());
         }
     }
     Some(())
@@ -672,7 +672,7 @@ pub fn load_chapter<R: Read + Seek>(
     }
 
     // Clean up trailing empty lines at the very bottom of the chapter
-    while wrapped_lines.last().map_or(false, |l| l.is_empty()) {
+    while wrapped_lines.last().is_some_and(|l| l.is_empty()) {
         wrapped_lines.pop();
     }
 
