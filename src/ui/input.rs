@@ -28,6 +28,8 @@ pub fn handle_reading_input(
             cfg.show_footer = !cfg.show_footer;
             app.lines_per_page =
                 (app.term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 });
+            // Kept like the same switch in the settings menu
+            save_config(cfg);
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.offset + app.lines_per_page < lines.len() {
