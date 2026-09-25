@@ -46,6 +46,13 @@ fn open_and_read(raw_path: &str) -> Result<(), String> {
     let cfg = config::load_or_create_config();
     let state = state::load_state(); // <-- Load all bookmarks from disk
 
-    // Hand off to the terminal UI loop, passing the state and the book's unique path
-    ui::run(archive, spine, cfg, state, absolute_path).map_err(|e| format!("terminal error: {}", e))
+    // Hand off to the terminal UI loop, passing the state and how to find this book's bookmark
+    ui::run(
+        archive,
+        spine,
+        cfg,
+        state,
+        state::BookId::new(absolute_path),
+    )
+    .map_err(|e| format!("terminal error: {}", e))
 }
