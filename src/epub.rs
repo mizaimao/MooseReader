@@ -877,9 +877,14 @@ pub fn load_chapter<R: Read + Seek>(
     wrap_width: usize,
     margin_left: usize,
     layout: &Layout,
+    plain_styles: bool,
 ) -> Vec<String> {
     let raw_html = read_zip_file(archive, path).unwrap_or_default();
-    let sheet = chapter_stylesheet(archive, path, &raw_html);
+    let sheet = if plain_styles {
+        Stylesheet::plain()
+    } else {
+        chapter_stylesheet(archive, path, &raw_html)
+    };
     let clean = format_html(&raw_html, &sheet);
 
     let mut wrapped_lines = Vec::new();
@@ -1065,7 +1070,7 @@ mod tests {
         .map(|(p, t)| (p.to_string(), t.to_string()));
         assert_eq!(spine, expected);
         assert_eq!(
-            load_chapter(&mut archive, &spine[1].0, 40, 0, &Layout::labels()),
+            load_chapter(&mut archive, &spine[1].0, 40, 0, &Layout::labels(), false),
             ["Hello there"]
         );
     }
@@ -1116,7 +1121,7 @@ mod tests {
     fn styles_carry_across_wrapped_lines() {
         let html = "<p><i>one two three four five six</i> plain <a href=\"https://x.org/n\">a long link</a></p>";
         let mut archive = epub(&[("c.html", html)]);
-        let lines = load_chapter(&mut archive, "c.html", 10, 0, &Layout::labels());
+        let lines = load_chapter(&mut archive, "c.html", 10, 0, &Layout::labels(), false);
         assert!(lines.len() >= 5, "{:?}", lines);
         for line in &lines {
             let text = strip_ansi(line);
@@ -1245,7 +1250,7 @@ mod tests {
                 max_rows: 30,
                 background: [0, 0, 0],
             };
-            load_chapter(archive, "OEBPS/text/c.html", 20, 2, &layout)
+            load_chapter(archive, "OEBPS/text/c.html", 20, 2, &layout, false)
         };
         let labels = |lines: &[String]| {
             let is_label = |l: &&String| strip_ansi(l).trim() == "[Image]";
@@ -1288,7 +1293,14 @@ mod tests {
             <p>Plain <span class="it">slanted</span> and <span class="b">heavy</span> words.</p>
             <p class="sc">Small &amp; caps</p></body></html>"#;
         let mut archive = epub(&[("OEBPS/styles/book.css", css), ("OEBPS/text/c.html", html)]);
-        let lines = load_chapter(&mut archive, "OEBPS/text/c.html", 30, 2, &Layout::labels());
+        let lines = load_chapter(
+            &mut archive,
+            "OEBPS/text/c.html",
+            30,
+            2,
+            &Layout::labels(),
+            false,
+        );
         let find = |needle: &str| {
             let line = lines.iter().find(|l| strip_ansi(l).contains(needle));
             line.unwrap_or_else(|| panic!("{:?} not in {:?}", needle, lines))

@@ -91,14 +91,27 @@ const READER_CSS: &str = "
 
 pub struct Stylesheet {
     rules: Vec<Rule>,
+    // Whether style="" attributes count; the plain look ignores them
+    inline: bool,
 }
 
 impl Stylesheet {
     /// The reader's defaults alone.
     pub fn new() -> Self {
-        let mut sheet = Stylesheet { rules: Vec::new() };
+        let mut sheet = Stylesheet {
+            rules: Vec::new(),
+            inline: true,
+        };
         sheet.add_rules(READER_CSS, Origin::Reader);
         sheet
+    }
+
+    /// The reader's defaults, ignoring everything the book says about style.
+    pub fn plain() -> Self {
+        Stylesheet {
+            inline: false,
+            ..Stylesheet::new()
+        }
     }
 
     /// Adds a book's stylesheet after the ones already added.
@@ -149,7 +162,9 @@ impl Stylesheet {
         for rule in matching {
             declared.merge(&rule.declared);
         }
-        declared.merge(&parse_declarations(inline));
+        if self.inline {
+            declared.merge(&parse_declarations(inline));
+        }
         declared.apply(*parent)
     }
 }

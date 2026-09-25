@@ -1,5 +1,6 @@
 pub mod input;
 pub mod render;
+pub mod settings;
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -19,9 +20,6 @@ use crate::config::Config;
 use crate::epub::{chapter_starts, load_chapter};
 use crate::images::{self, Kitty, Layout};
 use crate::state::{BookId, State, save_state};
-
-/// Rows in the settings menu.
-pub const SETTINGS_ITEMS: usize = 16;
 
 #[derive(PartialEq)]
 pub enum AppMode {
@@ -72,6 +70,7 @@ pub fn load_current(
         app.dynamic_width,
         cfg.margin_left,
         &app.layout,
+        cfg.plain_styles,
     )
 }
 

@@ -6,6 +6,7 @@ use crossterm::{
 use std::io::{self, Write};
 
 use super::AppState;
+use super::settings::{MAIN_ROWS, ROWS};
 use crate::config::{Alignment, Config, ProgressMode, Theme};
 use crate::i18n::{Text, tr};
 use crate::images;
@@ -442,7 +443,8 @@ pub fn draw_settings_menu(
     pal: &Palette,
 ) -> io::Result<()> {
     let box_width: u16 = 36;
-    let box_height: u16 = 23;
+    // Title, blank and header rows, both groups, a header between them, blank and bottom
+    let box_height = ROWS.len() as u16 + 7;
 
     let text_center_x = cfg.margin_left + (app.dynamic_width / 2);
     let mut start_x = text_center_x.saturating_sub((box_width / 2) as usize) as u16;
@@ -474,157 +476,75 @@ pub fn draw_settings_menu(
         "─".repeat((box_width as usize - 2).saturating_sub(width::width(&title)))
     )?;
 
-    let labels = [
-        tr(Text::MaxWidth),
-        tr(Text::MarginLeft),
-        tr(Text::MarginRight),
-        tr(Text::ScrollLines),
-        tr(Text::Theme),
-        tr(Text::Language),
-        tr(Text::Images),
-        tr(Text::ShowFooter),
-        tr(Text::DimFooter),
-        tr(Text::FooterAlign),
-        tr(Text::ChapterTitle),
-        tr(Text::ProgressMode),
-        tr(Text::ProgressBar),
-        tr(Text::BarLength),
-        tr(Text::ProgressPercent),
-        tr(Text::ChapterLoc),
-    ];
-
-    let align_str = match cfg.footer_align {
-        Alignment::Left => tr(Text::Left),
-        Alignment::Center => tr(Text::Center),
-        Alignment::Right => tr(Text::Right),
-    };
-    let prog_mode_str = match cfg.progress_mode {
-        ProgressMode::Chapter => tr(Text::Chapter),
-        ProgressMode::Overall => tr(Text::Overall),
-    };
-    let theme_str = match cfg.theme {
-        Theme::Default => tr(Text::TerminalTheme),
-        Theme::Sepia => "Sepia",
-        Theme::Dracula => "Dracula",
-        Theme::Hacker => "Hacker",
-        Theme::Nord => "Nord",
-        Theme::SolarizedLight => "Sol Light",
-        Theme::SolarizedDark => "Sol Dark",
-        Theme::Gruvbox => "Gruvbox",
-        Theme::Monokai => "Monokai",
-        Theme::Catppuccin => "Catppuccin",
-        Theme::Oceanic => "Oceanic",
-    };
-    let on_off = |on: bool| tr(if on { Text::On } else { Text::Off }).to_string();
-
-    let values = [
-        cfg.max_width.to_string(),
-        cfg.margin_left.to_string(),
-        cfg.margin_right.to_string(),
-        cfg.scroll_by_lines.to_string(),
-        theme_str.to_string(),
-        cfg.language.name().to_string(),
-        cfg.images.name().to_string(),
-        on_off(cfg.show_footer),
-        on_off(cfg.dim_footer),
-        align_str.to_string(),
-        on_off(cfg.show_chapter_title),
-        prog_mode_str.to_string(),
-        on_off(cfg.show_progress_bar),
-        cfg.progress_bar_length.to_string(),
-        on_off(cfg.show_progress_percentage),
-        on_off(cfg.show_chapter_location),
-    ];
-
     let inner_pad = " ".repeat(box_width as usize - 2);
-    let label = |i: usize| width::pad_right(&width::truncate(labels[i], 15), 15);
-    let value = |i: usize| width::pad_left(&width::truncate(&values[i], 10), 7);
-
-    queue!(stdout, MoveTo(start_x, start_y + 1))?;
-    write!(stdout, "│{}│", inner_pad)?;
-    queue!(stdout, MoveTo(start_x, start_y + 2))?;
-    write!(stdout, "│")?;
-    queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(
+    blank_row(stdout, start_x, start_y + 1, &inner_pad)?;
+    header_row(stdout, start_x, start_y + 2, Text::MainUi, pal)?;
+    blank_row(stdout, start_x, start_y + 3 + MAIN_ROWS as u16, &inner_pad)?;
+    header_row(
         stdout,
-        "{}",
-        width::center(&format!("--- {} ---", tr(Text::MainUi)), 34)
+        start_x,
+        start_y + 4 + MAIN_ROWS as u16,
+        Text::Footer,
+        pal,
     )?;
-    queue!(stdout, SetForegroundColor(pal.accent))?;
-    write!(stdout, "│")?;
 
-    for i in 0..7 {
-        queue!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
+    for (i, row) in ROWS.iter().enumerate() {
+        // The footer group sits below the main group and its own header
+        let y = start_y + 3 + i as u16 + if i < MAIN_ROWS { 0 } else { 2 };
+        let label = width::pad_right(&width::truncate(row.label(), 15), 15);
+        let value = width::pad_left(&width::truncate(&row.value(cfg), 10), 7);
+        queue!(stdout, MoveTo(start_x, y))?;
+        write!(stdout, "│")?;
         if app.settings_cursor == i {
-            let content = format!("{} < {} >", label(i), value(i));
-            write!(stdout, "│")?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.accent),
                 SetForegroundColor(pal.bg)
             )?;
+            let content = format!("{} < {} >", label, value);
             write!(stdout, "{}", width::center(&content, 34))?;
             queue!(
                 stdout,
                 SetBackgroundColor(pal.bg),
                 SetForegroundColor(pal.accent)
             )?;
-            write!(stdout, "│")?;
         } else {
-            write!(stdout, "│")?;
             queue!(stdout, SetForegroundColor(pal.fg))?;
-            let content = format!("{}   {}  ", label(i), value(i));
+            let content = format!("{}   {}  ", label, value);
             write!(stdout, "{}", width::center(&content, 34))?;
             queue!(stdout, SetForegroundColor(pal.accent))?;
-            write!(stdout, "│")?;
         }
+        write!(stdout, "│")?;
     }
 
-    queue!(stdout, MoveTo(start_x, start_y + 10))?;
-    write!(stdout, "│{}│", inner_pad)?;
-    queue!(stdout, MoveTo(start_x, start_y + 11))?;
-    write!(stdout, "│")?;
-    queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(
-        stdout,
-        "{}",
-        width::center(&format!("--- {} ---", tr(Text::Footer)), 34)
-    )?;
-    queue!(stdout, SetForegroundColor(pal.accent))?;
-    write!(stdout, "│")?;
-
-    for i in 7..16 {
-        queue!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
-        if app.settings_cursor == i {
-            let content = format!("{} < {} >", label(i), value(i));
-            write!(stdout, "│")?;
-            queue!(
-                stdout,
-                SetBackgroundColor(pal.accent),
-                SetForegroundColor(pal.bg)
-            )?;
-            write!(stdout, "{}", width::center(&content, 34))?;
-            queue!(
-                stdout,
-                SetBackgroundColor(pal.bg),
-                SetForegroundColor(pal.accent)
-            )?;
-            write!(stdout, "│")?;
-        } else {
-            write!(stdout, "│")?;
-            queue!(stdout, SetForegroundColor(pal.fg))?;
-            let content = format!("{}   {}  ", label(i), value(i));
-            write!(stdout, "{}", width::center(&content, 34))?;
-            queue!(stdout, SetForegroundColor(pal.accent))?;
-            write!(stdout, "│")?;
-        }
-    }
-
-    queue!(stdout, MoveTo(start_x, start_y + 21))?;
-    write!(stdout, "│{}│", inner_pad)?;
-    queue!(stdout, MoveTo(start_x, start_y + 22))?;
+    blank_row(stdout, start_x, start_y + box_height - 2, &inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + box_height - 1))?;
     write!(stdout, "╰{}╯", "─".repeat(box_width as usize - 2))?;
 
     queue!(stdout, SetForegroundColor(pal.fg))?;
     Ok(())
+}
+
+fn blank_row(stdout: &mut impl Write, x: u16, y: u16, inner_pad: &str) -> io::Result<()> {
+    queue!(stdout, MoveTo(x, y))?;
+    write!(stdout, "│{}│", inner_pad)
+}
+
+fn header_row(
+    stdout: &mut impl Write,
+    x: u16,
+    y: u16,
+    text: Text,
+    pal: &Palette,
+) -> io::Result<()> {
+    queue!(stdout, MoveTo(x, y))?;
+    write!(stdout, "│")?;
+    queue!(stdout, SetForegroundColor(pal.dim))?;
+    write!(
+        stdout,
+        "{}",
+        width::center(&format!("--- {} ---", tr(text)), 34)
+    )?;
+    queue!(stdout, SetForegroundColor(pal.accent))?;
+    write!(stdout, "│")
 }
