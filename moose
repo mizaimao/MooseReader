@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Opens a book in MooseReader, rebuilding the reader first whenever its code
+# has changed. Works from any folder, also through a link on your PATH:
+#
+#   ln -s "$PWD/moose" ~/.local/bin/moose
+#
+# Usage: moose BOOK
+#   BOOK is an .epub file or an unpacked EPUB folder (as Apple Books keeps them).
+#   Folders are packed into target/packed/ and opened from there; they are
+#   packed again only when something in them changes.
+
+set -euo pipefail
+
+if [[ $# -eq 0 || $1 == -h || $1 == --help ]]; then
+    echo "Usage: moose BOOK   (an .epub file or an unpacked EPUB folder)" >&2
+    [[ $# -eq 0 ]] && exit 1 || exit 0
+fi
+
+repo=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+binary="$repo/target/release/moose_reader"
+
+# Cargo would work this out too, but takes a second even when nothing changed
+changed=$(find "$repo/src" "$repo/Cargo.toml" "$repo/Cargo.lock" -newer "$binary" -print -quit 2>/dev/null || true)
+if [[ ! -x $binary || -n $changed ]]; then
+    echo "Building MooseReader..." >&2
+    cargo build --release --quiet --manifest-path "$repo/Cargo.toml"
+fi
+
+book=$1
+if [[ -d $book ]]; then
+    name=$(basename "${book%/}")
+    packed="$repo/target/packed/${name%.[eE][pP][uU][bB]}.epub"
+    if [[ ! -f $packed || -n $(find "$book" -newer "$packed" -print -quit) ]]; then
+        mkdir -p "$repo/target/packed"
+        "$repo/tools/pack-epub" -f -q -o "$packed" "$book"
+    fi
+    book=$packed
+fi
+
+exec "$binary" "$book"

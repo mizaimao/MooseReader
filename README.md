@@ -28,8 +28,17 @@ Then clone and run!
 ```
 git clone https://github.com/mizaimao/MooseReader.git
 cd MooseReader
-cargo run -- ./MyBook.epub
+./moose ./MyBook.epub
 ```
+
+`./moose` builds the reader the first time, and again whenever the code changes, then opens the book. It also opens unpacked EPUB folders, like the ones Apple Books keeps. To use it from any folder, link it into a folder on your `PATH`:
+```
+ln -s "$PWD/moose" ~/.local/bin/moose
+```
+`cargo run --release -- ./MyBook.epub` works too.
+
+### Packing EPUB folders
+`tools/pack-epub "Some Book.epub"` turns an unpacked EPUB folder into a standard `.epub` file next to it (`Some Book (packed).epub`), with `mimetype` stored first and uncompressed as the EPUB format requires. Use `-o` to choose the file name and `-f` to replace an existing file.
 
 ## ⌨️ Default Keybindings
 |        Key        |             Action             |
