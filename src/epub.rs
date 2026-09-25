@@ -45,6 +45,8 @@ fn format_html_for_terminal(input: &str) -> String {
     let mut in_pre = false;
     // Source line breaks are plain whitespace in HTML; only block tags start new lines
     let mut at_space = true;
+    // Whether the open <a> became a terminal hyperlink that </a> must close
+    let mut in_link = false;
 
     for c in input.chars() {
         if c == '<' {
@@ -160,13 +162,22 @@ fn format_html_for_terminal(input: &str) -> String {
                             href = &rest[..end];
                         }
                     }
-                    if !href.is_empty() {
+                    // Links into the book's own files and bare anchors have nowhere
+                    // for the terminal to go, so only web and mail links stay links
+                    if ["http://", "https://", "mailto:"]
+                        .iter()
+                        .any(|scheme| href.starts_with(scheme))
+                    {
                         output.push_str(&format!("\x1b]8;;{}\x1b\\\x1b[4m", href));
-                    } else {
-                        output.push_str("\x1b[4m");
+                        in_link = true;
                     }
                 }
-                "/a" => output.push_str("\x1b[24m\x1b]8;;\x1b\\"),
+                "/a" => {
+                    if in_link {
+                        output.push_str("\x1b[24m\x1b]8;;\x1b\\");
+                        in_link = false;
+                    }
+                }
 
                 tag if is_block(tag) => {
                     output.push('\n');
@@ -838,8 +849,7 @@ mod tests {
 
     #[test]
     fn styles_carry_across_wrapped_lines() {
-        let html =
-            "<p><i>one two three four five six</i> plain <a href=\"n.html\">a long link</a></p>";
+        let html = "<p><i>one two three four five six</i> plain <a href=\"https://x.org/n\">a long link</a></p>";
         let mut archive = epub(&[("c.html", html)]);
         let lines = load_chapter(&mut archive, "c.html", 10, 0);
         assert!(lines.len() >= 5, "{:?}", lines);
@@ -853,7 +863,7 @@ mod tests {
                 );
             }
             if text.contains("link") {
-                assert!(line.contains("\x1b]8;;n.html\x1b\\"), "{:?}", line);
+                assert!(line.contains("\x1b]8;;https://x.org/n\x1b\\"), "{:?}", line);
                 assert!(line.ends_with("\x1b]8;;\x1b\\"), "{:?}", line);
             }
         }
@@ -898,6 +908,17 @@ mod tests {
                 "A first line that runs on far past…",
                 "Section"
             ]
+        );
+    }
+
+    #[test]
+    fn only_web_links_become_hyperlinks() {
+        let out = format_html_for_terminal(
+            r#"<a href="c01.html#x">Chapter</a> <a name="n1">anchor</a> <a href="https://a.org/?q=1&amp;r=2">web</a>"#,
+        );
+        assert_eq!(
+            out,
+            "Chapter anchor \x1b]8;;https://a.org/?q=1&r=2\x1b\\\x1b[4mweb\x1b[24m\x1b]8;;\x1b\\"
         );
     }
 }
