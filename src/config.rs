@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::paths;
+
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Alignment {
@@ -71,22 +73,23 @@ impl Default for Config {
 }
 
 pub fn load_or_create_config() -> Config {
-    let config_path = "reader_config.json";
-    if let Ok(file_content) = std::fs::read_to_string(config_path) {
+    let config_path = paths::config_file();
+    if let Some(file_content) = paths::read_with_legacy(&config_path, "reader_config.json") {
         if let Ok(config) = serde_json::from_str(&file_content) {
+            // Rewrites a config carried over from the legacy location into the new one
+            if !config_path.exists() {
+                save_config(&config);
+            }
             return config;
         }
     }
     let default_config = Config::default();
-    if let Ok(json) = serde_json::to_string_pretty(&default_config) {
-        let _ = std::fs::write(config_path, json);
-    }
+    save_config(&default_config);
     default_config
 }
 
 pub fn save_config(cfg: &Config) {
-    let config_path = "reader_config.json";
     if let Ok(json) = serde_json::to_string_pretty(cfg) {
-        let _ = std::fs::write(config_path, json);
+        let _ = paths::write_atomic(&paths::config_file(), &json);
     }
 }
