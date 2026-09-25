@@ -2,9 +2,9 @@ use crossterm::event::KeyCode;
 use std::fs::File;
 use zip::ZipArchive;
 
-use super::{AppMode, AppState, SETTINGS_ITEMS, load_current};
-use crate::config::{Alignment, Config, ProgressMode, Theme, save_config};
-use crate::i18n;
+use super::settings::ROWS;
+use super::{AppMode, AppState, load_current};
+use crate::config::{Config, save_config};
 
 pub fn handle_reading_input(
     code: KeyCode,
@@ -136,180 +136,14 @@ pub fn handle_settings_input(
         }
 
         KeyCode::Char('j') | KeyCode::Down => {
-            app.settings_cursor = (app.settings_cursor + 1) % SETTINGS_ITEMS
+            app.settings_cursor = (app.settings_cursor + 1) % ROWS.len()
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.settings_cursor = if app.settings_cursor == 0 {
-                SETTINGS_ITEMS - 1
-            } else {
-                app.settings_cursor - 1
-            }
+            app.settings_cursor = (app.settings_cursor + ROWS.len() - 1) % ROWS.len()
         }
-
-        KeyCode::Char('h') | KeyCode::Left => {
-            let mut text_changed = false;
-            match app.settings_cursor {
-                0 => {
-                    if cfg.max_width > 20 {
-                        cfg.max_width -= 1;
-                        text_changed = true;
-                    }
-                }
-                1 => {
-                    if cfg.margin_left > 0 {
-                        cfg.margin_left -= 1;
-                        text_changed = true;
-                    }
-                }
-                2 => {
-                    if cfg.margin_right > 0 {
-                        cfg.margin_right -= 1;
-                        text_changed = true;
-                    }
-                }
-                3 => {
-                    if cfg.scroll_by_lines > 1 {
-                        cfg.scroll_by_lines -= 1;
-                    }
-                }
-                4 => {
-                    cfg.theme = match cfg.theme {
-                        Theme::Default => Theme::Oceanic,
-                        Theme::Sepia => Theme::Default,
-                        Theme::Dracula => Theme::Sepia,
-                        Theme::Hacker => Theme::Dracula,
-                        Theme::Nord => Theme::Hacker,
-                        Theme::SolarizedLight => Theme::Nord,
-                        Theme::SolarizedDark => Theme::SolarizedLight,
-                        Theme::Gruvbox => Theme::SolarizedDark,
-                        Theme::Monokai => Theme::Gruvbox,
-                        Theme::Catppuccin => Theme::Monokai,
-                        Theme::Oceanic => Theme::Catppuccin,
-                    };
-                    // Half-block pictures blend into the theme's background
-                    text_changed = true;
-                }
-                5 => {
-                    cfg.language = cfg.language.prev();
-                    i18n::set(cfg.language);
-                    // Reloads the chapter so its [Image] labels change language too
-                    text_changed = true;
-                }
-                6 => {
-                    cfg.images = cfg.images.prev();
-                    text_changed = true;
-                }
-                7 => cfg.show_footer = !cfg.show_footer,
-                8 => cfg.dim_footer = !cfg.dim_footer,
-                9 => {
-                    cfg.footer_align = match cfg.footer_align {
-                        Alignment::Left => Alignment::Right,
-                        Alignment::Center => Alignment::Left,
-                        Alignment::Right => Alignment::Center,
-                    }
-                }
-                10 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                11 => {
-                    cfg.progress_mode = match cfg.progress_mode {
-                        ProgressMode::Chapter => ProgressMode::Overall,
-                        ProgressMode::Overall => ProgressMode::Chapter,
-                    }
-                }
-                12 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                13 => {
-                    if cfg.progress_bar_length > 5 {
-                        cfg.progress_bar_length -= 1;
-                    }
-                }
-                14 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                15 => cfg.show_chapter_location = !cfg.show_chapter_location,
-                _ => {}
-            }
-            if text_changed {
-                update_layout_live(app, cfg, lines, archive, spine);
-            }
-        }
-
-        KeyCode::Char('l') | KeyCode::Right => {
-            let mut text_changed = false;
-            match app.settings_cursor {
-                0 => {
-                    if cfg.max_width < 200 {
-                        cfg.max_width += 1;
-                        text_changed = true;
-                    }
-                }
-                1 => {
-                    if cfg.margin_left < 40 {
-                        cfg.margin_left += 1;
-                        text_changed = true;
-                    }
-                }
-                2 => {
-                    if cfg.margin_right < 40 {
-                        cfg.margin_right += 1;
-                        text_changed = true;
-                    }
-                }
-                3 => {
-                    if cfg.scroll_by_lines < 50 {
-                        cfg.scroll_by_lines += 1;
-                    }
-                }
-                4 => {
-                    cfg.theme = match cfg.theme {
-                        Theme::Default => Theme::Sepia,
-                        Theme::Sepia => Theme::Dracula,
-                        Theme::Dracula => Theme::Hacker,
-                        Theme::Hacker => Theme::Nord,
-                        Theme::Nord => Theme::SolarizedLight,
-                        Theme::SolarizedLight => Theme::SolarizedDark,
-                        Theme::SolarizedDark => Theme::Gruvbox,
-                        Theme::Gruvbox => Theme::Monokai,
-                        Theme::Monokai => Theme::Catppuccin,
-                        Theme::Catppuccin => Theme::Oceanic,
-                        Theme::Oceanic => Theme::Default,
-                    };
-                    // Half-block pictures blend into the theme's background
-                    text_changed = true;
-                }
-                5 => {
-                    cfg.language = cfg.language.next();
-                    i18n::set(cfg.language);
-                    // Reloads the chapter so its [Image] labels change language too
-                    text_changed = true;
-                }
-                6 => {
-                    cfg.images = cfg.images.next();
-                    text_changed = true;
-                }
-                7 => cfg.show_footer = !cfg.show_footer,
-                8 => cfg.dim_footer = !cfg.dim_footer,
-                9 => {
-                    cfg.footer_align = match cfg.footer_align {
-                        Alignment::Left => Alignment::Center,
-                        Alignment::Center => Alignment::Right,
-                        Alignment::Right => Alignment::Left,
-                    }
-                }
-                10 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                11 => {
-                    cfg.progress_mode = match cfg.progress_mode {
-                        ProgressMode::Chapter => ProgressMode::Overall,
-                        ProgressMode::Overall => ProgressMode::Chapter,
-                    }
-                }
-                12 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                13 => {
-                    if cfg.progress_bar_length < 100 {
-                        cfg.progress_bar_length += 1;
-                    }
-                }
-                14 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                15 => cfg.show_chapter_location = !cfg.show_chapter_location,
-                _ => {}
-            }
-            if text_changed {
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('l') | KeyCode::Right => {
+            let forward = matches!(code, KeyCode::Char('l') | KeyCode::Right);
+            if ROWS[app.settings_cursor].step(cfg, forward) {
                 update_layout_live(app, cfg, lines, archive, spine);
             }
         }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::i18n::Language;
+use crate::i18n::{Language, Text, tr};
 use crate::images;
 use crate::paths;
 
@@ -19,7 +19,7 @@ pub enum ProgressMode {
     Overall,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     Default,
@@ -33,6 +33,50 @@ pub enum Theme {
     Monokai,
     Catppuccin,
     Oceanic,
+}
+
+const THEMES: [Theme; 11] = [
+    Theme::Default,
+    Theme::Sepia,
+    Theme::Dracula,
+    Theme::Hacker,
+    Theme::Nord,
+    Theme::SolarizedLight,
+    Theme::SolarizedDark,
+    Theme::Gruvbox,
+    Theme::Monokai,
+    Theme::Catppuccin,
+    Theme::Oceanic,
+];
+
+impl Theme {
+    pub fn next(self) -> Self {
+        THEMES[(self.index() + 1) % THEMES.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        THEMES[(self.index() + THEMES.len() - 1) % THEMES.len()]
+    }
+
+    fn index(self) -> usize {
+        THEMES.iter().position(|&t| t == self).unwrap_or(0)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Theme::Default => tr(Text::TerminalTheme),
+            Theme::Sepia => "Sepia",
+            Theme::Dracula => "Dracula",
+            Theme::Hacker => "Hacker",
+            Theme::Nord => "Nord",
+            Theme::SolarizedLight => "Sol Light",
+            Theme::SolarizedDark => "Sol Dark",
+            Theme::Gruvbox => "Gruvbox",
+            Theme::Monokai => "Monokai",
+            Theme::Catppuccin => "Catppuccin",
+            Theme::Oceanic => "Oceanic",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -55,6 +99,8 @@ pub struct Config {
     pub progress_mode: ProgressMode,
     pub language: Language,
     pub images: images::Setting,
+    /// Ignore the book's stylesheets and use the reader's own plain formatting
+    pub plain_styles: bool,
 }
 
 impl Default for Config {
@@ -76,6 +122,7 @@ impl Default for Config {
             progress_mode: ProgressMode::Overall,
             language: Language::Auto,
             images: images::Setting::Auto,
+            plain_styles: false,
         }
     }
 }
