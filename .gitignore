@@ -24,3 +24,9 @@ target
 # Added by cargo
 
 /target
+
+# Local books, and settings/bookmarks from before they moved to
+# ~/.config/moosereader and ~/.local/state/moosereader
+*.epub
+bookmarks.json
+reader_config.json
