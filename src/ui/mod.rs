@@ -17,7 +17,7 @@ use zip::ZipArchive;
 
 use crate::config::Config;
 use crate::epub::{chapter_starts, load_chapter};
-use crate::state::{Bookmark, State, save_state};
+use crate::state::{BookId, State, save_state};
 
 #[derive(PartialEq)]
 pub enum AppMode {
@@ -64,19 +64,13 @@ fn restore_terminal() {
     let _ = disable_raw_mode();
 }
 
-fn save_bookmark(state: &mut State, book_path: &str, app: &AppState, lines: &[String]) {
+fn save_bookmark(state: &mut State, book: &BookId, app: &AppState, lines: &[String]) {
     let progress = if lines.is_empty() {
         0.0
     } else {
         app.offset as f64 / lines.len() as f64
     };
-    state.books.insert(
-        book_path.to_string(),
-        Bookmark {
-            chapter: app.chapter_index,
-            progress,
-        },
-    );
+    state.record(book, app.chapter_index, progress);
     save_state(state);
 }
 
@@ -85,7 +79,7 @@ pub fn run(
     spine: Vec<(String, String)>,
     mut cfg: Config,
     mut state: State,
-    book_path: String,
+    book: BookId,
 ) -> io::Result<()> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
@@ -109,7 +103,7 @@ pub fn run(
         chapter_starts: chapter_starts(&mut archive, &spine),
     };
 
-    let progress = if let Some(bookmark) = state.books.get(&book_path) {
+    let progress = if let Some(bookmark) = state.find(&book) {
         app.chapter_index = std::cmp::min(bookmark.chapter, spine.len().saturating_sub(1));
         bookmark.progress
     } else {
@@ -210,7 +204,7 @@ pub fn run(
                             ),
                         };
                     if quit_requested {
-                        save_bookmark(&mut state, &book_path, &app, &lines);
+                        save_bookmark(&mut state, &book, &app, &lines);
                         break;
                     }
                 }
@@ -230,7 +224,7 @@ pub fn run(
             unsaved |= (app.chapter_index, app.offset) != position;
         } else if unsaved {
             // Saves once reading pauses, so closing the window or a crash loses at most half a second
-            save_bookmark(&mut state, &book_path, &app, &lines);
+            save_bookmark(&mut state, &book, &app, &lines);
             unsaved = false;
         }
     }
