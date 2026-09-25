@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 use zip::ZipArchive;
 
+use crate::css::{Align, Computed, Stylesheet};
 use crate::i18n::{Text, tr};
 use crate::images::{self, Layout};
 use crate::width;
@@ -56,21 +57,147 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// Starts a line to center: headings, or text-align: center.
+const CENTER: char = '\x1e';
+/// Starts a line to align right.
+const RIGHT: char = '\x1c';
+/// Starts a paragraph whose first line is indented (text-indent).
+const INDENT: char = '\x1a';
+const FIRST_LINE_INDENT: &str = "  ";
+
+fn strip_markers(line: &str) -> String {
+    line.chars()
+        .filter(|c| !matches!(*c, CENTER | RIGHT | INDENT))
+        .collect()
+}
+
+fn is_heading(tag: &str) -> bool {
+    matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+}
+
+/// Elements that have no content and no closing tag.
+fn is_void(tag: &str) -> bool {
+    matches!(
+        tag,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "image"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+/// Output text that switches bold, italic and underline codes only where the
+/// text's style changes.
+struct Writer {
+    output: String,
+    written: Computed,
+    // Source line breaks are plain whitespace in HTML; only block tags start new lines
+    at_space: bool,
+    // No text on this line yet, so the next text may start with a line marker
+    line_start: bool,
+    // Inside an entity such as &amp;, which small caps must not upper-case
+    in_entity: bool,
+}
+
+impl Writer {
+    fn restyle(&mut self, style: &Computed) {
+        let switches = [
+            (self.written.bold, style.bold, "\x1b[1m", "\x1b[22m"),
+            (self.written.italic, style.italic, "\x1b[3m", "\x1b[23m"),
+            (
+                self.written.underline,
+                style.underline,
+                "\x1b[4m",
+                "\x1b[24m",
+            ),
+        ];
+        for (was, now, on, off) in switches {
+            if was != now {
+                self.output.push_str(if now { on } else { off });
+            }
+        }
+        self.written = *style;
+    }
+
+    fn newline(&mut self, style: &Computed) {
+        self.restyle(style);
+        self.output.push('\n');
+        self.at_space = true;
+        self.line_start = true;
+    }
+
+    fn text(&mut self, c: char, style: &Computed) {
+        if c.is_ascii_whitespace() {
+            // Collapses runs of spaces and source line breaks; leaves &nbsp; (U+00A0) alone
+            if !self.at_space {
+                self.restyle(style);
+                self.output.push(' ');
+                self.at_space = true;
+            }
+            self.in_entity = false;
+            return;
+        }
+        if self.line_start {
+            match style.align {
+                Align::Center => self.output.push(CENTER),
+                Align::Right => self.output.push(RIGHT),
+                Align::Left if style.indent => self.output.push(INDENT),
+                Align::Left => {}
+            }
+            self.line_start = false;
+        }
+        self.restyle(style);
+        match c {
+            '&' => self.in_entity = true,
+            ';' => self.in_entity = false,
+            _ => {}
+        }
+        if style.small_caps && !self.in_entity {
+            self.output.extend(c.to_uppercase());
+        } else {
+            self.output.push(c);
+        }
+        self.at_space = false;
+    }
+}
+
+/// Formats with the reader's default styles only.
 fn format_html_for_terminal(input: &str) -> String {
+    format_html(input, &Stylesheet::new())
+}
+
+fn format_html(input: &str, sheet: &Stylesheet) -> String {
     let mut in_tag = false;
     let mut current_tag = String::new();
-    let mut output = String::with_capacity(input.len());
+    let mut w = Writer {
+        output: String::with_capacity(input.len()),
+        written: Computed::default(),
+        at_space: true,
+        line_start: true,
+        in_entity: false,
+    };
 
     let mut ignore_mode = false;
     let mut expected_closing_tag = String::new();
 
+    // Open elements, innermost last: tag, style, and whether it opened a hyperlink
+    let mut open: Vec<(String, Computed, bool)> = Vec::new();
+    let style_of =
+        |open: &[(String, Computed, bool)]| open.last().map_or(Computed::default(), |f| f.1);
     // Open lists, innermost last: None for <ul>, Some(next number) for <ol>
     let mut lists: Vec<Option<usize>> = Vec::new();
     let mut in_pre = false;
-    // Source line breaks are plain whitespace in HTML; only block tags start new lines
-    let mut at_space = true;
-    // Whether the open <a> became a terminal hyperlink that </a> must close
-    let mut in_link = false;
 
     for c in input.chars() {
         if c == '<' {
@@ -95,115 +222,103 @@ fn format_html_for_terminal(input: &str) -> String {
                 continue;
             }
 
-            // An empty element such as <a id="c05"/> must not switch on a style that never closes
-            if self_closing && !is_block(base_tag) && !matches!(base_tag, "img" | "image") {
+            if let Some(name) = base_tag.strip_prefix('/') {
+                // Closes the innermost element of this name and anything left open inside it
+                if let Some(pos) = open.iter().rposition(|f| f.0 == name) {
+                    let closes_link = open.drain(pos..).any(|f| f.2);
+                    if closes_link {
+                        w.restyle(&style_of(&open));
+                        w.output.push_str("\x1b]8;;\x1b\\");
+                    }
+                }
+                let parent = style_of(&open);
+                match name {
+                    "ul" | "ol" => {
+                        lists.pop();
+                        w.newline(&parent);
+                    }
+                    "pre" => {
+                        in_pre = false;
+                        w.newline(&parent);
+                    }
+                    "h1" | "h2" | "h3" => {
+                        w.newline(&parent);
+                        w.newline(&parent);
+                    }
+                    tag if is_block(tag) || is_heading(tag) || tag == "li" => w.newline(&parent),
+                    _ => {}
+                }
                 continue;
             }
 
-            match base_tag {
-                "head" | "style" | "script" => {
-                    ignore_mode = true;
-                    expected_closing_tag = format!("/{}", base_tag);
-                    continue;
-                }
-                _ => {}
+            let name = base_tag;
+            if matches!(name, "head" | "style" | "script") && !self_closing {
+                ignore_mode = true;
+                expected_closing_tag = format!("/{}", name);
+                continue;
             }
 
-            match base_tag {
-                "h1" | "h2" | "h3" => {
-                    output.push_str("\n\x1b[1m\x1e");
-                    at_space = true;
-                }
-
-                // FIX: Changed from \x1b[0m to \x1b[22m to stop wiping the background color
-                "/h1" | "/h2" | "/h3" => {
-                    output.push_str("\x1b[22m\n\n");
-                    at_space = true;
-                }
-
-                "h4" | "h5" | "h6" => {
-                    output.push_str("\n\x1b[1m");
-                    at_space = true;
-                }
-                "/h4" | "/h5" | "/h6" => {
-                    output.push_str("\x1b[22m\n");
-                    at_space = true;
-                }
-
-                "b" | "strong" => output.push_str("\x1b[1m"),
-                "/b" | "/strong" => output.push_str("\x1b[22m"),
-                "i" | "em" => output.push_str("\x1b[3m"),
-                "/i" | "/em" => output.push_str("\x1b[23m"),
-
-                "ul" | "ol" | "/ul" | "/ol" => {
-                    match base_tag {
-                        "ul" => lists.push(None),
-                        "ol" => lists.push(Some(1)),
-                        _ => {
-                            lists.pop();
-                        }
+            // Line breaks come before the element's own style starts
+            let parent = style_of(&open);
+            match name {
+                "ul" | "ol" => {
+                    w.newline(&parent);
+                    if !self_closing {
+                        lists.push((name == "ol").then_some(1));
                     }
-                    output.push('\n');
-                    at_space = true;
                 }
                 "li" => {
-                    output.push('\n');
+                    w.newline(&parent);
                     match lists.last_mut() {
                         Some(Some(n)) => {
-                            output.push_str(&format!("{}. ", n));
+                            w.output.push_str(&format!("{}. ", n));
                             *n += 1;
                         }
-                        _ => output.push_str("• "),
+                        _ => w.output.push_str("• "),
                     }
-                    at_space = true;
+                    w.line_start = false;
                 }
-                "/li" => {
-                    output.push('\n');
-                    at_space = true;
+                "pre" => {
+                    w.newline(&parent);
+                    in_pre = !self_closing;
                 }
-
-                "pre" | "/pre" => {
-                    in_pre = base_tag == "pre";
-                    output.push('\n');
-                    at_space = true;
-                }
-
                 "img" | "image" => {
                     // Kept as a marker line; the chapter layout decides how to show it
                     let src = attribute(&current_tag, "src")
                         .or_else(|| attribute(&current_tag, "xlink:href"))
                         .or_else(|| attribute(&current_tag, "href"))
                         .unwrap_or("");
-                    output.push_str(&format!("\n{}{}\n", images::MARKER, src));
-                    at_space = true;
+                    w.newline(&parent);
+                    w.output.push(images::MARKER);
+                    w.output.push_str(src);
+                    w.newline(&parent);
                 }
-
-                "a" => {
-                    let href = attribute(&current_tag, "href").unwrap_or("");
-                    // Links into the book's own files and bare anchors have nowhere
-                    // for the terminal to go, so only web and mail links stay links
-                    if ["http://", "https://", "mailto:"]
-                        .iter()
-                        .any(|scheme| href.starts_with(scheme))
-                    {
-                        output.push_str(&format!("\x1b]8;;{}\x1b\\\x1b[4m", href));
-                        in_link = true;
-                    }
-                }
-                "/a" => {
-                    if in_link {
-                        output.push_str("\x1b[24m\x1b]8;;\x1b\\");
-                        in_link = false;
-                    }
-                }
-
-                tag if is_block(tag) => {
-                    output.push('\n');
-                    at_space = true;
-                }
-
+                tag if is_block(tag) || is_heading(tag) => w.newline(&parent),
                 _ => {}
             }
+
+            // Empty elements such as <a id="c05"/> and <br> have no text to style
+            if self_closing || is_void(name) {
+                continue;
+            }
+            let class = attribute(&current_tag, "class").unwrap_or("");
+            let inline = attribute(&current_tag, "style").unwrap_or("");
+            let mut style = sheet.compute(&parent, name, class, inline);
+            let mut link = false;
+            if name == "a" {
+                let href = attribute(&current_tag, "href").unwrap_or("");
+                // Links into the book's own files and bare anchors have nowhere
+                // for the terminal to go, so only web and mail links stay links
+                if ["http://", "https://", "mailto:"]
+                    .iter()
+                    .any(|scheme| href.starts_with(scheme))
+                {
+                    w.output.push_str(&format!("\x1b]8;;{}\x1b\\", href));
+                    style.underline = true;
+                    link = true;
+                }
+            }
+            open.push((name.to_string(), style, link));
             continue;
         }
 
@@ -212,20 +327,60 @@ fn format_html_for_terminal(input: &str) -> String {
         } else if ignore_mode {
             continue;
         } else if in_pre {
-            output.push(c);
-        } else if c.is_ascii_whitespace() {
-            // Collapses runs of spaces and source line breaks; leaves &nbsp; (U+00A0) alone
-            if !at_space {
-                output.push(' ');
-                at_space = true;
-            }
+            w.restyle(&style_of(&open));
+            w.output.push(c);
         } else {
-            output.push(c);
-            at_space = false;
+            w.text(c, &style_of(&open));
         }
     }
 
-    decode_entities(&output)
+    w.restyle(&Computed::default());
+    if open.iter().any(|f| f.2) {
+        w.output.push_str("\x1b]8;;\x1b\\");
+    }
+    decode_entities(&w.output)
+}
+
+/// The reader's defaults plus the stylesheets a chapter links to or embeds,
+/// in document order.
+fn chapter_stylesheet<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+    html: &str,
+) -> Stylesheet {
+    let mut sheet = Stylesheet::new();
+    // ASCII lower-casing keeps every byte offset the same as in `html`
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find('<') {
+        let start = from + pos;
+        let Some(len) = lower[start..].find('>') else {
+            break;
+        };
+        let (tag, tag_lower) = (
+            &html[start + 1..start + len],
+            &lower[start + 1..start + len],
+        );
+        from = start + len + 1;
+        if tag_lower.starts_with("link") {
+            let is_stylesheet = attribute(tag_lower, "rel")
+                .is_some_and(|rel| rel.split_whitespace().any(|r| r == "stylesheet"));
+            if let (true, Some(href)) = (is_stylesheet, attribute(tag, "href"))
+                && let Some(css) = read_zip_file(archive, &resolve_href(path, href))
+            {
+                sheet.add(&css);
+            }
+        } else if tag_lower.starts_with("style") {
+            if let Some(end) = lower[from..].find("</style") {
+                sheet.add(&html[from..from + end]);
+                from += end;
+            }
+        } else if tag_lower.starts_with("body") {
+            // Stylesheets belong in the head
+            break;
+        }
+    }
+    sheet
 }
 
 /// Decodes character references in a single pass, so "&amp;lt;" stays "&lt;".
@@ -675,7 +830,7 @@ pub fn get_epub_spine<R: Read + Seek>(
 fn first_line<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Option<String> {
     const MAX_COLUMNS: usize = 40;
     let html = read_zip_file(archive, path)?;
-    let text = strip_ansi(&format_html_for_terminal(&html).replace('\x1e', ""));
+    let text = strip_ansi(&strip_markers(&format_html_for_terminal(&html)));
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     if line.starts_with(images::MARKER) {
         return Some(format!("[{}]", tr(Text::Image)));
@@ -724,7 +879,8 @@ pub fn load_chapter<R: Read + Seek>(
     layout: &Layout,
 ) -> Vec<String> {
     let raw_html = read_zip_file(archive, path).unwrap_or_default();
-    let clean = format_html_for_terminal(&raw_html);
+    let sheet = chapter_stylesheet(archive, path, &raw_html);
+    let clean = format_html(&raw_html, &sheet);
 
     let mut wrapped_lines = Vec::new();
     let indent = " ".repeat(margin_left);
@@ -759,19 +915,30 @@ pub fn load_chapter<R: Read + Seek>(
             continue;
         }
 
-        if trimmed.contains('\x1e') {
-            // Headings wrap like body text, each line centered by its width on screen
-            let heading = trimmed.replace('\x1e', "");
-            for part in textwrap::wrap(&heading, wrap_width) {
-                let sealed = styles.seal(&part);
-                let pad = wrap_width.saturating_sub(width::width(&sealed)) / 2;
-                wrapped_lines.push(format!("{}{}{}", indent, " ".repeat(pad), sealed));
-            }
+        // A line starts with at most one marker: centered, right-aligned or first-line indent
+        let align = if trimmed.contains(CENTER) {
+            Align::Center
+        } else if trimmed.contains(RIGHT) {
+            Align::Right
         } else {
-            let wrapped = textwrap::wrap(trimmed, wrap_width);
-            for w in wrapped {
-                wrapped_lines.push(format!("{}{}", indent, styles.seal(&w)));
-            }
+            Align::Left
+        };
+        let first = if trimmed.contains(INDENT) {
+            FIRST_LINE_INDENT
+        } else {
+            ""
+        };
+        let text = strip_markers(trimmed);
+        let options = textwrap::Options::new(wrap_width).initial_indent(first);
+        for part in textwrap::wrap(&text, options) {
+            let sealed = styles.seal(&part);
+            let room = wrap_width.saturating_sub(width::width(&sealed));
+            let pad = match align {
+                Align::Center => room / 2,
+                Align::Right => room,
+                Align::Left => 0,
+            };
+            wrapped_lines.push(format!("{}{}{}", indent, " ".repeat(pad), sealed));
         }
     }
 
@@ -789,7 +956,7 @@ mod tests {
 
     /// Visible text lines of formatted HTML, without styling or blank lines.
     fn text_lines(html: &str) -> Vec<String> {
-        strip_ansi(&format_html_for_terminal(html).replace('\x1e', ""))
+        strip_ansi(&strip_markers(&format_html_for_terminal(html)))
             .lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
@@ -1108,5 +1275,49 @@ mod tests {
 
         let lines = chapter(&mut archive, images::Mode::Labels);
         assert_eq!(labels(&lines), 3);
+    }
+
+    #[test]
+    fn book_stylesheets_format_the_text() {
+        let css = ".c { text-align: center } .r { text-align: right } .tx { text-indent: 1.5em }
+            .it { font-style: italic } .sc { font-variant: small-caps }";
+        let html = r#"<html><head><link rel="stylesheet" type="text/css" href="../styles/book.css"/>
+            <style>.b { font-weight: bold }</style></head><body>
+            <p class="c">Centered line</p><p class="r">Right</p>
+            <p class="tx">An indented paragraph that is long enough to wrap onto a second line.</p>
+            <p>Plain <span class="it">slanted</span> and <span class="b">heavy</span> words.</p>
+            <p class="sc">Small &amp; caps</p></body></html>"#;
+        let mut archive = epub(&[("OEBPS/styles/book.css", css), ("OEBPS/text/c.html", html)]);
+        let lines = load_chapter(&mut archive, "OEBPS/text/c.html", 30, 2, &Layout::labels());
+        let find = |needle: &str| {
+            let line = lines.iter().find(|l| strip_ansi(l).contains(needle));
+            line.unwrap_or_else(|| panic!("{:?} not in {:?}", needle, lines))
+        };
+
+        // Centered and right-aligned by the text's width in the 30 columns after the margin
+        assert_eq!(
+            strip_ansi(find("Centered")),
+            format!("  {}Centered line", " ".repeat(8))
+        );
+        assert_eq!(
+            strip_ansi(find("Right")),
+            format!("  {}Right", " ".repeat(25))
+        );
+        // Only the first line of the indented paragraph starts further in
+        assert!(strip_ansi(find("An indented")).starts_with("    An indented"));
+        let second = lines
+            .iter()
+            .position(|l| strip_ansi(l).contains("An indented"))
+            .unwrap()
+            + 1;
+        assert!(
+            strip_ansi(&lines[second]).starts_with("  ")
+                && !strip_ansi(&lines[second]).starts_with("   ")
+        );
+        // Styles from a linked file and from a <style> block
+        assert!(find("slanted").contains("\x1b[3mslanted\x1b[23m"));
+        assert!(find("heavy").contains("\x1b[1mheavy\x1b[22m"));
+        // Small caps upper-case the text but not the entity
+        assert!(strip_ansi(find("SMALL")).ends_with("SMALL & CAPS"));
     }
 }
