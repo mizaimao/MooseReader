@@ -463,4 +463,80 @@ mod tests {
             .map(|l| format!(" {}", l))
         );
     }
+
+    #[test]
+    fn settings_cycle_through_every_mode() {
+        let mut setting = Setting::Auto;
+        for _ in 0..4 {
+            setting = setting.next();
+        }
+        assert_eq!(setting, Setting::Auto);
+        assert_eq!(Setting::Auto.prev(), Setting::Off);
+        assert_eq!(Mode::from_setting(Setting::Kitty), Mode::Kitty);
+        assert_eq!(Mode::from_setting(Setting::Blocks), Mode::Blocks);
+        assert_eq!(Mode::from_setting(Setting::Off), Mode::Labels);
+    }
+
+    #[test]
+    fn kitty_places_the_visible_rows_and_sends_each_picture_once() {
+        let picture = crate::test_support::png(100, 200, [0, 120, 200, 255]);
+        let mut archive = crate::test_support::archive(&[("p.png", &picture)]);
+        let layout = layout(Mode::Kitty, 30);
+        // 100 x 200 px on 10 x 20 px cells: 10 columns by 10 rows
+        let mut lines = vec!["text".to_string()];
+        lines.extend(picture_lines(&mut archive, "p.png", 40, 0, &layout));
+        lines.push("text".to_string());
+        assert_eq!(lines.len(), 12);
+
+        let mut kitty = Kitty::default();
+        let (mut frame, mut sent) = (Vec::new(), Vec::new());
+        // Scrolled so the picture's first three rows are off the top
+        kitty
+            .draw(&mut frame, &mut sent, &lines, 4, 20, &layout, &mut archive)
+            .unwrap();
+        let frame = String::from_utf8(frame).unwrap();
+        assert!(frame.contains("\x1b[1;16H"), "top row, centered: {frame:?}");
+        assert!(frame.contains("y=60,w=100,h=140,c=10,r=7"), "{frame:?}");
+        assert_eq!(String::from_utf8(sent).unwrap().matches("a=t,").count(), 1);
+
+        let mut sent = Vec::new();
+        kitty
+            .draw(
+                &mut Vec::new(),
+                &mut sent,
+                &lines,
+                0,
+                20,
+                &layout,
+                &mut archive,
+            )
+            .unwrap();
+        assert!(sent.is_empty(), "the terminal already has it");
+    }
+
+    #[test]
+    fn nothing_is_cleared_or_freed_until_a_picture_is_sent() {
+        let mut kitty = Kitty::default();
+        let mut out = Vec::new();
+        kitty.clear(&mut out).unwrap();
+        assert!(out.is_empty());
+        kitty.sent.insert(42);
+        kitty.clear(&mut out).unwrap();
+        assert_eq!(out, b"\x1b_Ga=d,d=a,q=2\x1b\\");
+        let mut released = Vec::new();
+        kitty.release(&mut released).unwrap();
+        assert_eq!(released, b"\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
+        assert!(kitty.sent.is_empty());
+    }
+
+    #[test]
+    fn broken_or_missing_pictures_get_a_label() {
+        let mut archive = crate::test_support::archive(&[("bad.png", b"not a picture")]);
+        for mode in [Mode::Kitty, Mode::Blocks, Mode::Labels] {
+            for path in ["bad.png", "missing.png"] {
+                let lines = picture_lines(&mut archive, path, 40, 2, &layout(mode, 30));
+                assert_eq!(lines, ["  \x1b[2m[Image]\x1b[22m"], "{mode:?} {path}");
+            }
+        }
+    }
 }

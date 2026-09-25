@@ -667,4 +667,30 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn languages_cycle_and_name_themselves_distinctly() {
+        let mut language = Auto;
+        for _ in 0..ALL.len() {
+            language = language.next();
+        }
+        assert_eq!(language, Auto);
+        assert_eq!(Auto.prev(), German);
+        let names: std::collections::HashSet<_> = ALL[1..].iter().map(|l| l.name()).collect();
+        assert_eq!(names.len(), ALL.len() - 1);
+    }
+
+    #[test]
+    fn text_follows_the_language_of_its_own_thread() {
+        set(German);
+        assert_eq!(tr(Text::Settings), "Einstellungen");
+        set(SimplifiedChinese);
+        assert_eq!(tr(Text::Settings), "设置");
+        let elsewhere = std::thread::spawn(|| tr(Text::Settings)).join().unwrap();
+        assert_eq!(
+            elsewhere, "Settings",
+            "another thread keeps its own language"
+        );
+        set(English);
+    }
 }

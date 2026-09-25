@@ -345,4 +345,47 @@ mod tests {
         assert!(inner.italic && inner.align == Align::Center);
         assert!(!sheet.compute(&outer, "span", "n", "").italic);
     }
+
+    #[test]
+    fn weights_decorations_and_letter_case() {
+        let mut sheet = Stylesheet::new();
+        sheet.add(
+            ".m { font-weight: 500 } .h { FONT-WEIGHT: 600 } .u { text-decoration: underline }
+             .n { text-decoration: none } .i { Font-Style: Italic }",
+        );
+        assert!(!style(&sheet, "span", "m", "").bold);
+        assert!(style(&sheet, "span", "h", "").bold);
+        let underlined = style(&sheet, "span", "u", "");
+        assert!(underlined.underline);
+        assert!(!sheet.compute(&underlined, "span", "n", "").underline);
+        assert!(style(&sheet, "span", "i", "").italic);
+    }
+
+    #[test]
+    fn more_classes_beat_fewer_whatever_the_order() {
+        let mut sheet = Stylesheet::new();
+        sheet.add(".a.b { font-style: italic } .a { font-style: normal }");
+        assert!(style(&sheet, "p", "a b", "").italic);
+        assert!(!style(&sheet, "p", "a", "").italic);
+        assert!(
+            !style(&sheet, "p", "b", "").italic,
+            ".a.b needs both classes"
+        );
+    }
+
+    #[test]
+    fn the_plain_sheet_ignores_style_attributes() {
+        let sheet = Stylesheet::plain();
+        assert!(!style(&sheet, "span", "", "font-style: italic").italic);
+        assert!(style(&sheet, "i", "", "").italic);
+    }
+
+    #[test]
+    fn broken_css_keeps_the_rules_before_it() {
+        let mut sheet = Stylesheet::new();
+        sheet.add(".ok { font-weight: bold } .broken { font-style: italic ");
+        sheet.add("no braces at all");
+        assert!(style(&sheet, "span", "ok", "").bold);
+        assert!(!style(&sheet, "span", "broken", "").italic);
+    }
 }
