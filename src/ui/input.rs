@@ -31,7 +31,7 @@ pub fn handle_reading_input(
             // Kept like the same switch in the settings menu
             save_config(cfg);
         }
-        KeyCode::Char('j') | KeyCode::Down => {
+        KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
             if app.offset + app.lines_per_page < lines.len() {
                 app.offset += 1;
             } else if app.chapter_index + 1 < spine.len() {
@@ -45,7 +45,7 @@ pub fn handle_reading_input(
                 app.offset = 0;
             }
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
             if app.offset > 0 {
                 app.offset -= 1;
             } else if app.chapter_index > 0 {
