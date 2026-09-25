@@ -1,8 +1,10 @@
-use roxmltree::Document;
+use roxmltree::{Document, ParsingOptions};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek};
 use zip::ZipArchive;
+
+const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
+const NCX_MEDIA_TYPE: &str = "application/x-dtbncx+xml";
 
 /// Tags that start a new line of their own, open or closing.
 fn is_block(tag: &str) -> bool {
@@ -294,102 +296,199 @@ fn strip_ansi(s: &str) -> String {
     res
 }
 
-fn read_zip_file(archive: &mut ZipArchive<File>, name: &str) -> Option<String> {
+fn read_zip_file<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<String> {
     let mut file = archive.by_name(name).ok()?;
     let mut content = String::new();
     file.read_to_string(&mut content).ok()?;
     Some(content)
 }
 
-pub fn get_epub_spine(archive: &mut ZipArchive<File>) -> Option<Vec<(String, String)>> {
+fn parse_xml(xml: &str) -> Option<Document<'_>> {
+    // EPUB 2 NCX and XHTML files usually carry a DOCTYPE, which roxmltree rejects by default
+    let options = ParsingOptions {
+        allow_dtd: true,
+        ..ParsingOptions::default()
+    };
+    Document::parse_with_options(xml, options).ok()
+}
+
+/// Decodes %XX escapes: package hrefs are URLs, zip entry names are not.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = s
+            .get(i + 1..i + 3)
+            .filter(|hex| bytes[i] == b'%' && hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        if let Some(hex) = escaped {
+            out.push(u8::from_str_radix(hex, 16).unwrap_or(b'%'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Resolves an href against the zip path of the file it appears in,
+/// the way a browser resolves a relative URL, dropping any #fragment.
+fn resolve_href(base_file: &str, href: &str) -> String {
+    let href = percent_decode(href.split('#').next().unwrap_or(href));
+    let mut parts: Vec<&str> = base_file.split('/').collect();
+    parts.pop();
+    if href.starts_with('/') {
+        parts.clear();
+    }
+    for segment in href.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            segment => parts.push(segment),
+        }
+    }
+    parts.join("/")
+}
+
+/// Adds titles from an EPUB 3 navigation document's table of contents.
+fn nav_titles<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    nav_path: &str,
+    titles: &mut HashMap<String, String>,
+) -> Option<()> {
+    let xml = read_zip_file(archive, nav_path)?;
+    let doc = parse_xml(&xml)?;
+    let navs: Vec<_> = doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "nav")
+        .collect();
+    let toc = navs
+        .iter()
+        .find(|n| {
+            n.attribute((EPUB_OPS_NS, "type"))
+                .is_some_and(|t| t.split_whitespace().any(|t| t == "toc"))
+        })
+        .or(navs.first())?;
+
+    for link in toc.descendants().filter(|n| n.tag_name().name() == "a") {
+        if let Some(href) = link.attribute("href") {
+            let text: String = link
+                .descendants()
+                .filter(|n| n.is_text())
+                .filter_map(|n| n.text())
+                .collect();
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !text.is_empty() {
+                titles.entry(resolve_href(nav_path, href)).or_insert(text);
+            }
+        }
+    }
+    Some(())
+}
+
+/// Adds titles from an EPUB 2 NCX file, keeping any already found.
+fn ncx_titles<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    ncx_path: &str,
+    titles: &mut HashMap<String, String>,
+) -> Option<()> {
+    let xml = read_zip_file(archive, ncx_path)?;
+    let doc = parse_xml(&xml)?;
+    for nav_point in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "navPoint")
+    {
+        let text_node = nav_point
+            .descendants()
+            .find(|n| n.tag_name().name() == "text");
+        let content_node = nav_point
+            .descendants()
+            .find(|n| n.tag_name().name() == "content");
+
+        if let (Some(t), Some(c)) = (text_node, content_node) {
+            if let (Some(text), Some(src)) = (t.text(), c.attribute("src")) {
+                titles
+                    .entry(resolve_href(ncx_path, src))
+                    .or_insert_with(|| text.trim().to_string());
+            }
+        }
+    }
+    Some(())
+}
+
+pub fn get_epub_spine<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Option<Vec<(String, String)>> {
     let container_xml = read_zip_file(archive, "META-INF/container.xml")?;
-    let doc = Document::parse(&container_xml).ok()?;
+    let doc = parse_xml(&container_xml)?;
     let rootfile = doc
         .descendants()
         .find(|n| n.tag_name().name() == "rootfile")?;
     let opf_path = rootfile.attribute("full-path")?;
 
     let opf_xml = read_zip_file(archive, opf_path)?;
-    let opf_doc = Document::parse(&opf_xml).ok()?;
+    let opf_doc = parse_xml(&opf_xml)?;
 
+    // Manifest items by id, with each href resolved to its full zip path
     let mut manifest = HashMap::new();
-    let spine_node = opf_doc
-        .descendants()
-        .find(|n| n.tag_name().name() == "spine")?;
-    let toc_id = spine_node.attribute("toc");
-    let mut ncx_href = None;
-
     for node in opf_doc
         .descendants()
         .filter(|n| n.tag_name().name() == "item")
     {
         if let (Some(id), Some(href)) = (node.attribute("id"), node.attribute("href")) {
-            manifest.insert(id, href);
-            if Some(id) == toc_id {
-                ncx_href = Some(href);
-            }
+            manifest.insert(id, (resolve_href(opf_path, href), node));
         }
     }
+    let spine_node = opf_doc
+        .descendants()
+        .find(|n| n.tag_name().name() == "spine")?;
 
-    let mut titles_map = HashMap::new();
-    if let Some(ncx_rel_path) = ncx_href {
-        let ncx_full_path = if opf_path.contains('/') {
-            let parts: Vec<&str> = opf_path.rsplitn(2, '/').collect();
-            format!("{}/{}", parts[1], ncx_rel_path)
-        } else {
-            ncx_rel_path.to_string()
-        };
+    let nav_path = manifest
+        .values()
+        .find(|(_, item)| {
+            item.attribute("properties")
+                .is_some_and(|p| p.split_whitespace().any(|p| p == "nav"))
+        })
+        .map(|(path, _)| path.clone());
+    let ncx_path = spine_node
+        .attribute("toc")
+        .and_then(|id| manifest.get(id))
+        .or_else(|| {
+            manifest
+                .values()
+                .find(|(_, item)| item.attribute("media-type") == Some(NCX_MEDIA_TYPE))
+        })
+        .map(|(path, _)| path.clone());
 
-        if let Some(ncx_xml) = read_zip_file(archive, &ncx_full_path) {
-            if let Ok(ncx_doc) = Document::parse(&ncx_xml) {
-                for nav_point in ncx_doc
-                    .descendants()
-                    .filter(|n| n.tag_name().name() == "navPoint")
-                {
-                    let text_node = nav_point
-                        .descendants()
-                        .find(|n| n.tag_name().name() == "text");
-                    let content_node = nav_point
-                        .descendants()
-                        .find(|n| n.tag_name().name() == "content");
-
-                    if let (Some(t), Some(c)) = (text_node, content_node) {
-                        if let (Some(text), Some(src)) = (t.text(), c.attribute("src")) {
-                            let clean_src = src.split('#').next().unwrap_or(src);
-                            titles_map.insert(clean_src.to_string(), text.trim().to_string());
-                        }
-                    }
-                }
-            }
-        }
+    // EPUB 3 books may carry both; the navigation document wins and the NCX fills gaps
+    let mut titles = HashMap::new();
+    if let Some(nav_path) = &nav_path {
+        nav_titles(archive, nav_path, &mut titles);
+    }
+    if let Some(ncx_path) = &ncx_path {
+        ncx_titles(archive, ncx_path, &mut titles);
     }
 
-    let mut spine = Vec::new();
-    for node in spine_node
+    let spine = spine_node
         .descendants()
         .filter(|n| n.tag_name().name() == "itemref")
-    {
-        if let Some(idref) = node.attribute("idref") {
-            if let Some(href) = manifest.get(idref) {
-                let full_path = if opf_path.contains('/') {
-                    let parts: Vec<&str> = opf_path.rsplitn(2, '/').collect();
-                    format!("{}/{}", parts[1], href)
-                } else {
-                    href.to_string()
-                };
-                let title = titles_map
-                    .get(*href)
-                    .cloned()
-                    .unwrap_or_else(|| "Section".to_string());
-                spine.push((full_path, title));
-            }
-        }
-    }
+        .filter_map(|n| manifest.get(n.attribute("idref")?))
+        .map(|(path, _)| {
+            let title = titles
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| "Section".to_string());
+            (path.clone(), title)
+        })
+        .collect();
     Some(spine)
 }
 
-pub fn load_chapter(
-    archive: &mut ZipArchive<File>,
+pub fn load_chapter<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
     path: &str,
     wrap_width: usize,
     margin_left: usize,
@@ -495,5 +594,96 @@ mod tests {
             "AT&T &unknown; &#xZZ; &"
         );
         assert_eq!(decode_entities("a&nbsp;b"), "a\u{a0}b");
+    }
+
+    fn epub(files: &[(&str, &str)]) -> ZipArchive<std::io::Cursor<Vec<u8>>> {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        ZipArchive::new(zip.finish().unwrap()).unwrap()
+    }
+
+    const CONTAINER: &str = r#"<?xml version="1.0"?>
+        <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>
+          <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+        </rootfiles></container>"#;
+
+    #[test]
+    fn epub3_nav_titles_and_encoded_paths() {
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>
+            <item id="nav" href="nav/toc.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+            <item id="c1" href="Text/Chapter%20One.xhtml" media-type="application/xhtml+xml"/>
+            <item id="c2" href="Text/two.xhtml" media-type="application/xhtml+xml"/>
+          </manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
+        let nav = r#"<!DOCTYPE html>
+          <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+            <nav epub:type="landmarks"><ol><li><a href="../Text/two.xhtml">Wrong list</a></li></ol></nav>
+            <nav epub:type="toc"><ol>
+              <li><a href="../Text/Chapter%20One.xhtml#start"><span>Chapter</span> One</a></li>
+              <li><a href="../Text/two.xhtml">Chapter Two</a></li>
+            </ol></nav>
+          </body></html>"#;
+        let mut archive = epub(&[
+            ("META-INF/container.xml", CONTAINER),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/nav/toc.xhtml", nav),
+            (
+                "OEBPS/Text/Chapter One.xhtml",
+                "<html><body><p>Hello there</p></body></html>",
+            ),
+            ("OEBPS/Text/two.xhtml", "<p>Second</p>"),
+        ]);
+
+        let spine = get_epub_spine(&mut archive).unwrap();
+        let expected = [
+            ("OEBPS/Text/Chapter One.xhtml", "Chapter One"),
+            ("OEBPS/Text/two.xhtml", "Chapter Two"),
+        ]
+        .map(|(p, t)| (p.to_string(), t.to_string()));
+        assert_eq!(spine, expected);
+        assert_eq!(
+            load_chapter(&mut archive, &spine[0].0, 40, 0),
+            ["Hello there"]
+        );
+    }
+
+    #[test]
+    fn ncx_with_doctype_gives_titles() {
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest>
+            <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+            <item id="c1" href="c1.html" media-type="application/xhtml+xml"/>
+          </manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        let ncx = r#"<?xml version="1.0"?>
+          <!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
+          <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+            <navPoint id="p1"><navLabel><text>CHAPTER 1</text></navLabel><content src="c1.html#c01"/></navPoint>
+          </navMap></ncx>"#;
+        let mut archive = epub(&[
+            ("META-INF/container.xml", CONTAINER),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/toc.ncx", ncx),
+            ("OEBPS/c1.html", "<p>Text</p>"),
+        ]);
+
+        let spine = get_epub_spine(&mut archive).unwrap();
+        assert_eq!(
+            spine,
+            [("OEBPS/c1.html".to_string(), "CHAPTER 1".to_string())]
+        );
+    }
+
+    #[test]
+    fn hrefs_resolve_like_urls() {
+        assert_eq!(
+            resolve_href("OEBPS/nav/toc.xhtml", "../Text/a%20b.xhtml#x"),
+            "OEBPS/Text/a b.xhtml"
+        );
+        assert_eq!(resolve_href("content.opf", "./ch1.html"), "ch1.html");
+        assert_eq!(resolve_href("OEBPS/content.opf", "/root.html"), "root.html");
+        assert_eq!(percent_decode("caf%C3%A9 100%"), "café 100%");
     }
 }
