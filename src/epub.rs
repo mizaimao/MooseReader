@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 use zip::ZipArchive;
 
+use crate::i18n::{Text, tr};
 use crate::width;
 
 const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
@@ -147,7 +148,7 @@ fn format_html_for_terminal(input: &str) -> String {
                 }
 
                 "img" | "image" => {
-                    output.push_str("\n\x1b[2m[Image]\x1b[22m\n");
+                    output.push_str(&format!("\n\x1b[2m[{}]\x1b[22m\n", tr(Text::Image)));
                     at_space = true;
                 }
 
@@ -644,7 +645,7 @@ pub fn get_epub_spine<R: Read + Seek>(
         };
         let title = match titles.get(path) {
             Some(title) => title.clone(),
-            None => first_line(archive, path).unwrap_or_else(|| "Section".to_string()),
+            None => first_line(archive, path).unwrap_or_else(|| tr(Text::Section).to_string()),
         };
         spine.push((path.clone(), title));
     }

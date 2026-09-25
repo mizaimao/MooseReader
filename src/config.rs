@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Language;
 use crate::paths;
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
@@ -51,6 +52,7 @@ pub struct Config {
     pub show_progress_percentage: bool,
     pub progress_bar_length: usize,
     pub progress_mode: ProgressMode,
+    pub language: Language,
 }
 
 impl Default for Config {
@@ -70,6 +72,7 @@ impl Default for Config {
             show_progress_percentage: true,
             progress_bar_length: 10,
             progress_mode: ProgressMode::Overall,
+            language: Language::Auto,
         }
     }
 }
@@ -88,6 +91,13 @@ pub fn load_or_create_config() -> Config {
     let default_config = Config::default();
     save_config(&default_config);
     default_config
+}
+
+/// The configured interface language, read without creating a settings file.
+pub fn peek_language() -> Language {
+    paths::read_with_legacy(&paths::config_file(), "reader_config.json")
+        .and_then(|text| serde_json::from_str::<Config>(&text).ok())
+        .map_or(Language::Auto, |cfg| cfg.language)
 }
 
 pub fn save_config(cfg: &Config) {
