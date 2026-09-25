@@ -1332,4 +1332,69 @@ mod tests {
         // Small caps upper-case the text but not the entity
         assert!(strip_ansi(find("SMALL")).ends_with("SMALL & CAPS"));
     }
+
+    #[test]
+    fn plain_styles_ignore_the_books_stylesheets() {
+        let css = ".c { text-align: center } .it { font-style: italic }";
+        let html = r#"<html><head><link rel="stylesheet" href="s.css"/></head><body>
+            <p class="c">Centered</p><p><span class="it">slanted</span> <i>tagged</i></p></body></html>"#;
+        let mut archive = epub(&[("s.css", css), ("c.html", html)]);
+        let lines = load_chapter(&mut archive, "c.html", 30, 2, &Layout::labels(), true);
+        assert_eq!(strip_ansi(&lines[0]), "  Centered");
+        let words = lines.iter().find(|l| l.contains("slanted")).unwrap();
+        assert!(!words.contains("\x1b[3mslanted"), "{words:?}");
+        assert!(
+            words.contains("\x1b[3mtagged"),
+            "the reader's own <i> still counts"
+        );
+    }
+
+    #[test]
+    fn nested_lists_number_each_level() {
+        let html =
+            "<ol><li>A<ol><li>x</li><li>y</li></ol></li><li>B</li></ol><ul><li>dot</li></ul>";
+        assert_eq!(text_lines(html), ["1. A", "1. x", "2. y", "2. B", "• dot"]);
+    }
+
+    #[test]
+    fn every_line_of_a_centered_paragraph_is_centered() {
+        let out = format_html_for_terminal(r#"<p style="text-align: center">one<br/>three</p>"#);
+        let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines, [format!("{CENTER}one"), format!("{CENTER}three")]);
+    }
+
+    #[test]
+    fn main_headings_are_bold_centered_and_followed_by_a_blank_line() {
+        let out = format_html_for_terminal("<h2>Title</h2><p>Text</p>");
+        assert!(
+            out.contains(&format!("{CENTER}\x1b[1mTitle\x1b[22m\n\n")),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn stray_closing_tags_leave_open_styles_alone() {
+        let out = format_html_for_terminal("<i>a</p>b</i>c");
+        assert!(out.contains("\x1b[3ma\nb\x1b[23mc"), "{out:?}");
+    }
+
+    #[test]
+    fn closing_a_block_closes_what_was_left_open_inside_it() {
+        let out = format_html_for_terminal("<div><span><i>open</div>after");
+        assert!(out.contains("open\x1b[23m\nafter"), "{out:?}");
+    }
+
+    #[test]
+    fn scripts_and_style_blocks_are_not_text() {
+        let html = "<head><title>T</title></head><script>var x = 1;</script><style>p { color: red }</style><p>shown</p>";
+        assert_eq!(text_lines(html), ["shown"]);
+    }
+
+    #[test]
+    fn empty_and_missing_chapters_have_no_lines() {
+        let mut archive = epub(&[("c.html", "<html><body>  </body></html>")]);
+        for path in ["c.html", "missing.html"] {
+            assert!(load_chapter(&mut archive, path, 30, 2, &Layout::labels(), false).is_empty());
+        }
+    }
 }

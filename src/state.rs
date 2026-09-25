@@ -148,4 +148,36 @@ mod tests {
         assert_eq!(state.books.len(), 1);
         assert!(state.books.contains_key("fingerprint:2"));
     }
+
+    #[test]
+    fn bookmarks_round_trip_through_the_file() {
+        paths::reset_test_dir();
+        let mut state = State::default();
+        let book = id("fingerprint:7", "/books/a.epub");
+        state.record(&book, 3, 0.25);
+        save_state(&state);
+        let loaded = load_state();
+        let mark = loaded.find(&book).unwrap();
+        assert_eq!((mark.chapter, mark.progress), (3, 0.25));
+        assert_eq!(mark.path, "/books/a.epub");
+    }
+
+    #[test]
+    fn a_copied_or_renamed_book_has_the_same_key() {
+        paths::reset_test_dir();
+        let dir = paths::test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes: Vec<u8> = (0..50_000u32).map(|i| (i * 7 % 256) as u8).collect();
+        let mut edited = bytes.clone();
+        edited[17_000] ^= 1; // inside the sample taken at 16 KiB
+        let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        std::fs::write(path("a.epub"), &bytes).unwrap();
+        std::fs::write(path("renamed.epub"), &bytes).unwrap();
+        std::fs::write(path("edited.epub"), &edited).unwrap();
+        let key = |name: &str| BookId::new(path(name)).key;
+        assert_eq!(key("a.epub"), key("renamed.epub"));
+        assert_ne!(key("a.epub"), key("edited.epub"));
+        // A file that can't be read is known by its path
+        assert_eq!(key("missing.epub"), path("missing.epub"));
+    }
 }

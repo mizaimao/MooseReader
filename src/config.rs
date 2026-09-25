@@ -168,4 +168,75 @@ mod tests {
         assert!(cfg.theme == Theme::Dracula);
         assert_eq!(cfg.margin_left, Config::default().margin_left);
     }
+
+    use crate::paths;
+
+    #[test]
+    fn settings_round_trip_through_the_file() {
+        paths::reset_test_dir();
+        let cfg = Config {
+            max_width: 99,
+            theme: Theme::Nord,
+            plain_styles: true,
+            ..Config::default()
+        };
+        save_config(&cfg);
+        let loaded = load_or_create_config();
+        assert_eq!(
+            (loaded.max_width, loaded.theme, loaded.plain_styles),
+            (99, Theme::Nord, true)
+        );
+    }
+
+    #[test]
+    fn a_missing_file_is_created_with_defaults() {
+        paths::reset_test_dir();
+        assert_eq!(
+            load_or_create_config().max_width,
+            Config::default().max_width
+        );
+        assert!(paths::config_file().exists());
+    }
+
+    #[test]
+    fn an_old_settings_file_is_carried_over() {
+        paths::reset_test_dir();
+        let old = paths::test_dir().join("legacy/reader_config.json");
+        paths::write_atomic(&old, r#"{ "max_width": 111 }"#).unwrap();
+        assert_eq!(load_or_create_config().max_width, 111);
+        assert!(paths::config_file().exists(), "written to the new place");
+    }
+
+    #[test]
+    fn a_broken_file_gives_defaults() {
+        paths::reset_test_dir();
+        paths::write_atomic(&paths::config_file(), "{ not json").unwrap();
+        assert_eq!(
+            load_or_create_config().max_width,
+            Config::default().max_width
+        );
+    }
+
+    #[test]
+    fn the_language_is_read_without_creating_a_file() {
+        paths::reset_test_dir();
+        assert_eq!(peek_language(), Language::Auto);
+        assert!(!paths::config_file().exists());
+        save_config(&Config {
+            language: Language::Japanese,
+            ..Config::default()
+        });
+        assert_eq!(peek_language(), Language::Japanese);
+    }
+
+    #[test]
+    fn themes_cycle_through_all_eleven() {
+        let mut theme = Theme::Default;
+        for _ in 0..11 {
+            theme = theme.next();
+        }
+        assert_eq!(theme, Theme::Default);
+        assert_eq!(Theme::Default.prev(), Theme::Oceanic);
+        assert_eq!(Theme::Oceanic.next(), Theme::Default);
+    }
 }

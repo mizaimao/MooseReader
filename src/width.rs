@@ -61,4 +61,19 @@ mod tests {
         assert_eq!(pad_left("地铁", 6), "  地铁");
         assert_eq!(center("地铁", 7), " 地铁  ");
     }
+
+    #[test]
+    fn truncation_at_the_edges() {
+        assert_eq!(truncate("abc", 0), "");
+        assert_eq!(truncate("abc", 1), "…");
+        assert_eq!(truncate("abc", 2), "a…");
+        assert_eq!(truncate("地铁", 3), "地…");
+        assert_eq!(
+            truncate("地铁", 2),
+            "…",
+            "a wide character never gets cut in half"
+        );
+        assert_eq!(center("ab", 5), " ab  ");
+        assert_eq!(pad_right("toolong", 3), "toolong");
+    }
 }
