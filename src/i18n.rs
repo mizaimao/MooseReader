@@ -2,7 +2,7 @@
 //! plurals or grammar, so a static table per language is enough.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::cell::Cell;
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
 pub enum Language {
@@ -74,8 +74,11 @@ impl Language {
     }
 }
 
-// Index into ALL of the language in use; English until set() runs
-static CURRENT: AtomicU8 = AtomicU8::new(1);
+thread_local! {
+    // The language in use, English until set() runs. The reader has one thread;
+    // tests each have their own, so a test switching languages affects no other.
+    static CURRENT: Cell<Language> = const { Cell::new(Language::English) };
+}
 
 /// Switches the interface language; Auto follows the system locale.
 pub fn set(language: Language) {
@@ -83,11 +86,11 @@ pub fn set(language: Language) {
         Auto => from_locale(),
         other => other,
     };
-    CURRENT.store(resolved.index() as u8, Ordering::Relaxed);
+    CURRENT.with(|current| current.set(resolved));
 }
 
 fn current() -> Language {
-    ALL[CURRENT.load(Ordering::Relaxed) as usize]
+    CURRENT.with(Cell::get)
 }
 
 /// The first of LC_ALL, LC_MESSAGES and LANG that is set, as POSIX orders them.

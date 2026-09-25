@@ -257,7 +257,30 @@ pub fn draw_reading_view(
         }
     }
 
-    if cfg.show_footer {
+    if let Some((column, text)) = footer(app, cfg, lines, spine) {
+        let footer_color = if cfg.dim_footer { pal.dim } else { pal.fg };
+        queue!(
+            stdout,
+            MoveTo(0, app.term_rows.saturating_sub(1)),
+            SetForegroundColor(footer_color)
+        )?;
+        write!(stdout, "{}{}\r", " ".repeat(column), text)?;
+        queue!(stdout, SetForegroundColor(pal.fg))?;
+    }
+    Ok(())
+}
+
+/// The footer line and the column it starts at; None when it is off or empty.
+pub fn footer(
+    app: &AppState,
+    cfg: &Config,
+    lines: &[String],
+    spine: &[(String, String)],
+) -> Option<(usize, String)> {
+    if !cfg.show_footer {
+        return None;
+    }
+    {
         let mut footer_parts = Vec::new();
         if cfg.show_chapter_title {
             footer_parts.push(spine[app.chapter_index].1.clone());
@@ -295,7 +318,10 @@ pub fn draw_reading_view(
             footer_parts.push(format!("({}/{})", app.chapter_index + 1, spine.len()));
         }
 
-        if !footer_parts.is_empty() {
+        if footer_parts.is_empty() {
+            return None;
+        }
+        {
             // The footer must fit on its row; a longer one wraps and scrolls the page up
             let max_len = (app.term_cols as usize).saturating_sub(cfg.margin_left);
             let compose = |parts: &[String]| format!("--- {} ---", parts.join(" "));
@@ -309,6 +335,10 @@ pub fn draw_reading_view(
                     footer_parts.remove(0);
                 }
                 footer_text = compose(&footer_parts);
+            }
+            if width::width(&footer_text) > max_len {
+                // Then the dashes; the numbers are the last thing to lose
+                footer_text = footer_parts.join(" ");
             }
             footer_text = width::truncate(&footer_text, max_len);
             let footer_len = width::width(&footer_text);
@@ -335,23 +365,9 @@ pub fn draw_reading_view(
                 }
             };
 
-            let footer_color = if cfg.dim_footer { pal.dim } else { pal.fg };
-
-            queue!(
-                stdout,
-                MoveTo(0, app.term_rows - 1),
-                SetForegroundColor(footer_color)
-            )?;
-            write!(
-                stdout,
-                "{padding}{text}\r",
-                padding = " ".repeat(padding_spaces),
-                text = footer_text
-            )?;
-            queue!(stdout, SetForegroundColor(pal.fg))?;
+            Some((padding_spaces, footer_text))
         }
     }
-    Ok(())
 }
 
 pub fn draw_toc_menu(
