@@ -3,10 +3,13 @@ pub mod render;
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
-    style::{SetBackgroundColor, SetForegroundColor},
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    style::{ResetColor, SetBackgroundColor, SetForegroundColor},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use std::fs::File;
 use std::io::{self, Write};
@@ -34,6 +37,45 @@ pub struct AppState {
     pub settings_cursor: usize,
     pub term_cols: u16,
     pub term_rows: u16,
+}
+
+/// Raw mode on the alternate screen, undone on drop so an early return
+/// never leaves the shell unusable or the book in the scrollback.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
+}
+
+fn restore_terminal() {
+    let _ = execute!(io::stdout(), ResetColor, Show, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+}
+
+fn save_bookmark(state: &mut State, book_path: &str, app: &AppState, lines: &[String]) {
+    let progress = if lines.is_empty() {
+        0.0
+    } else {
+        app.offset as f64 / lines.len() as f64
+    };
+    state.books.insert(
+        book_path.to_string(),
+        Bookmark {
+            chapter: app.chapter_index,
+            progress,
+        },
+    );
+    save_state(state);
 }
 
 pub fn run(
@@ -83,9 +125,16 @@ pub fn run(
         app.offset = lines.len().saturating_sub(app.lines_per_page);
     }
 
+    // Restore the terminal before the panic message prints, or it lands on the alternate screen
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default_hook(info);
+    }));
+
     let mut stdout = io::stdout();
-    enable_raw_mode()?;
-    execute!(stdout, Hide, Clear(ClearType::All))?;
+    let _terminal = TerminalGuard::enter()?;
+    let mut unsaved = false;
 
     loop {
         // Grab the active color palette and flood-fill the background
@@ -110,49 +159,41 @@ pub fn run(
         stdout.flush()?;
 
         if event::poll(std::time::Duration::from_millis(500))? {
+            let position = (app.chapter_index, app.offset);
             // Read exactly one event per poll; a second read() would block and drop this one
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                    let quit_requested = match app.mode {
-                        AppMode::Reading => input::handle_reading_input(
-                            key_event.code,
-                            &mut app,
-                            &mut cfg,
-                            &mut lines,
-                            &mut archive,
-                            &spine,
-                        ),
-                        AppMode::TocMenu => input::handle_toc_input(
-                            key_event.code,
-                            &mut app,
-                            &cfg,
-                            &mut lines,
-                            &mut archive,
-                            &spine,
-                        ),
-                        AppMode::SettingsMenu => input::handle_settings_input(
-                            key_event.code,
-                            &mut app,
-                            &mut cfg,
-                            &mut lines,
-                            &mut archive,
-                            &spine,
-                        ),
-                    };
-                    if quit_requested {
-                        let current_progress = if lines.is_empty() {
-                            0.0
-                        } else {
-                            app.offset as f64 / lines.len() as f64
+                    let ctrl_c = key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        && key_event.code == KeyCode::Char('c');
+                    let quit_requested = ctrl_c
+                        || match app.mode {
+                            AppMode::Reading => input::handle_reading_input(
+                                key_event.code,
+                                &mut app,
+                                &mut cfg,
+                                &mut lines,
+                                &mut archive,
+                                &spine,
+                            ),
+                            AppMode::TocMenu => input::handle_toc_input(
+                                key_event.code,
+                                &mut app,
+                                &cfg,
+                                &mut lines,
+                                &mut archive,
+                                &spine,
+                            ),
+                            AppMode::SettingsMenu => input::handle_settings_input(
+                                key_event.code,
+                                &mut app,
+                                &mut cfg,
+                                &mut lines,
+                                &mut archive,
+                                &spine,
+                            ),
                         };
-                        state.books.insert(
-                            book_path.clone(),
-                            Bookmark {
-                                chapter: app.chapter_index,
-                                progress: current_progress,
-                            },
-                        );
-                        save_state(&state);
+                    if quit_requested {
+                        save_bookmark(&mut state, &book_path, &app, &lines);
                         break;
                     }
                 }
@@ -169,11 +210,14 @@ pub fn run(
                 }
                 _ => {}
             }
+            unsaved |= (app.chapter_index, app.offset) != position;
+        } else if unsaved {
+            // Saves once reading pauses, so closing the window or a crash loses at most half a second
+            save_bookmark(&mut state, &book_path, &app, &lines);
+            unsaved = false;
         }
     }
 
-    // Reset colors when closing the app
-    execute!(stdout, crossterm::style::ResetColor, Show)?;
-    disable_raw_mode()?;
+    // Dropping the guard resets colors and hands the terminal back
     Ok(())
 }
