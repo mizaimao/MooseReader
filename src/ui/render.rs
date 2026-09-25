@@ -564,3 +564,72 @@ fn header_row(
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(cfg: &Config, cols: u16) -> AppState {
+        AppState::new(cols, 20, cfg, vec![0.0, 0.5, 1.0])
+    }
+
+    fn spine() -> Vec<(String, String)> {
+        vec![("a".into(), "Alpha".into()), ("b".into(), "Beta".into())]
+    }
+
+    fn text(app: &AppState, cfg: &Config) -> Option<String> {
+        footer(app, cfg, &vec![String::new(); 100], &spine()).map(|(_, text)| text)
+    }
+
+    #[test]
+    fn the_footer_shows_the_parts_that_are_on() {
+        let mut cfg = Config::default();
+        let app = app(&cfg, 80);
+        assert_eq!(
+            text(&app, &cfg).unwrap(),
+            "--- Alpha [░░░░░░░░░░] 0% (1/2) ---"
+        );
+        cfg.show_progress_bar = false;
+        cfg.show_chapter_title = false;
+        assert_eq!(text(&app, &cfg).unwrap(), "--- 0% (1/2) ---");
+        cfg.show_progress_percentage = false;
+        cfg.show_chapter_location = false;
+        assert_eq!(text(&app, &cfg), None, "nothing left to show");
+        cfg = Config::default();
+        cfg.show_footer = false;
+        assert_eq!(text(&app, &cfg), None);
+    }
+
+    #[test]
+    fn progress_follows_the_mode() {
+        let mut cfg = Config {
+            progress_bar_length: 4,
+            ..Config::default()
+        };
+        let mut app = app(&cfg, 80);
+        app.chapter_index = 1;
+        app.offset = 50;
+        cfg.progress_mode = ProgressMode::Chapter;
+        assert!(text(&app, &cfg).unwrap().contains("[██░░] 50%"));
+        // Halfway through the second of two equal chapters
+        cfg.progress_mode = ProgressMode::Overall;
+        assert!(text(&app, &cfg).unwrap().contains("[███░] 75%"));
+    }
+
+    #[test]
+    fn the_footer_sits_where_it_is_aligned() {
+        let mut cfg = Config::default();
+        let app = app(&cfg, 80);
+        let spine = spine();
+        let lines = vec![String::new(); 100];
+        let column = |cfg: &Config| footer(&app, cfg, &lines, &spine).unwrap().0;
+        let len = width::width(&text(&app, &cfg).unwrap());
+        // Text runs from column 4 across min(80, 80 - 4 - 4) = 72 columns
+        cfg.footer_align = Alignment::Left;
+        assert_eq!(column(&cfg), 4);
+        cfg.footer_align = Alignment::Center;
+        assert_eq!(column(&cfg), 4 + (72 - len) / 2);
+        cfg.footer_align = Alignment::Right;
+        assert_eq!(column(&cfg), 4 + 72 - len);
+    }
+}

@@ -200,3 +200,96 @@ impl Row {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Language;
+
+    /// Picks one numeric setting out of the config.
+    type Field = fn(&mut Config) -> &mut usize;
+
+    #[test]
+    fn numbers_stay_in_their_range() {
+        let mut cfg = Config::default();
+        let cases: [(Row, Field, usize, usize); 5] = [
+            (Row::MaxWidth, |c| &mut c.max_width, 20, 200),
+            (Row::MarginLeft, |c| &mut c.margin_left, 0, 40),
+            (Row::MarginRight, |c| &mut c.margin_right, 0, 40),
+            (Row::ScrollLines, |c| &mut c.scroll_by_lines, 1, 50),
+            (Row::BarLength, |c| &mut c.progress_bar_length, 5, 100),
+        ];
+        for (row, field, min, max) in cases {
+            *field(&mut cfg) = min;
+            row.step(&mut cfg, false);
+            assert_eq!(*field(&mut cfg), min, "{row:?}");
+            *field(&mut cfg) = max;
+            row.step(&mut cfg, true);
+            assert_eq!(*field(&mut cfg), max, "{row:?}");
+            row.step(&mut cfg, false);
+            assert_eq!(*field(&mut cfg), max - 1, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn choices_come_back_around() {
+        let mut cfg = Config::default();
+        let start = cfg.clone();
+        let same = |a: &Config, b: &Config| {
+            serde_json::to_string(a).unwrap() == serde_json::to_string(b).unwrap()
+        };
+        for (row, choices) in [
+            (Row::Theme, 11),
+            (Row::Language, 10),
+            (Row::Images, 4),
+            (Row::FooterAlign, 3),
+            (Row::PlainStyles, 2),
+            (Row::ProgressMode, 2),
+            (Row::ShowFooter, 2),
+        ] {
+            for _ in 0..choices {
+                row.step(&mut cfg, true);
+            }
+            assert!(same(&cfg, &start), "{row:?} forward");
+            row.step(&mut cfg, true);
+            row.step(&mut cfg, false);
+            assert!(same(&cfg, &start), "{row:?} forward then back");
+        }
+        i18n::set(Language::English);
+    }
+
+    #[test]
+    fn only_layout_changes_ask_for_a_new_layout() {
+        for row in ROWS {
+            let mut cfg = Config::default();
+            let expected = matches!(
+                row,
+                Row::MaxWidth
+                    | Row::MarginLeft
+                    | Row::MarginRight
+                    | Row::Theme
+                    | Row::Language
+                    | Row::Images
+                    | Row::PlainStyles
+            );
+            assert_eq!(row.step(&mut cfg, true), expected, "{row:?}");
+        }
+        i18n::set(Language::English);
+    }
+
+    #[test]
+    fn rows_show_their_settings() {
+        let mut cfg = Config::default();
+        for row in ROWS {
+            assert!(
+                !row.label().is_empty() && !row.value(&cfg).is_empty(),
+                "{row:?}"
+            );
+        }
+        cfg.plain_styles = true;
+        cfg.footer_align = Alignment::Right;
+        assert_eq!(Row::PlainStyles.value(&cfg), "On");
+        assert_eq!(Row::FooterAlign.value(&cfg), "Right");
+        assert_eq!(Row::Theme.value(&cfg), "Terminal");
+    }
+}
