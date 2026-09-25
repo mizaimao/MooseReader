@@ -4,11 +4,11 @@ pub mod render;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    execute,
+    execute, queue,
     style::{ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
+        BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
+        LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     },
 };
 use std::fs::File;
@@ -135,30 +135,44 @@ pub fn run(
     let mut stdout = io::stdout();
     let _terminal = TerminalGuard::enter()?;
     let mut unsaved = false;
+    let mut redraw = true;
+    let mut frame = Vec::new();
 
     loop {
-        // Grab the active color palette and flood-fill the background
-        let palette = render::get_palette(&cfg.theme);
-        execute!(
-            stdout,
-            MoveTo(0, 0),
-            SetBackgroundColor(palette.bg),
-            SetForegroundColor(palette.fg),
-            Clear(ClearType::All)
-        )?;
+        // Draw only after something changed, into one buffer written at once,
+        // wrapped in a synchronized update so the terminal never shows a half-drawn frame
+        if redraw {
+            frame.clear();
+            // Grab the active color palette and flood-fill the background
+            let palette = render::get_palette(&cfg.theme);
+            queue!(
+                frame,
+                BeginSynchronizedUpdate,
+                MoveTo(0, 0),
+                SetBackgroundColor(palette.bg),
+                SetForegroundColor(palette.fg),
+                Clear(ClearType::All)
+            )?;
 
-        // Pass the palette into the render functions
-        render::draw_reading_view(&mut stdout, &app, &cfg, &lines, &spine, &palette)?;
-        match app.mode {
-            AppMode::TocMenu => {
-                render::draw_toc_menu(&mut stdout, &mut app, &cfg, &spine, &palette)?
+            // Pass the palette into the render functions
+            render::draw_reading_view(&mut frame, &app, &cfg, &lines, &spine, &palette)?;
+            match app.mode {
+                AppMode::TocMenu => {
+                    render::draw_toc_menu(&mut frame, &mut app, &cfg, &spine, &palette)?
+                }
+                AppMode::SettingsMenu => {
+                    render::draw_settings_menu(&mut frame, &app, &cfg, &palette)?
+                }
+                AppMode::Reading => {}
             }
-            AppMode::SettingsMenu => render::draw_settings_menu(&mut stdout, &app, &cfg, &palette)?,
-            AppMode::Reading => {}
+            queue!(frame, EndSynchronizedUpdate)?;
+            stdout.write_all(&frame)?;
+            stdout.flush()?;
+            redraw = false;
         }
-        stdout.flush()?;
 
         if event::poll(std::time::Duration::from_millis(500))? {
+            redraw = true;
             let position = (app.chapter_index, app.offset);
             // Read exactly one event per poll; a second read() would block and drop this one
             match event::read()? {

@@ -1,6 +1,6 @@
 use crossterm::{
     cursor::MoveTo,
-    execute,
+    queue,
     style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor},
 };
 use std::io::{self, Write};
@@ -231,7 +231,7 @@ pub fn get_palette(theme: &Theme) -> Palette {
 }
 
 pub fn draw_reading_view(
-    stdout: &mut io::Stdout,
+    stdout: &mut impl Write,
     app: &AppState,
     cfg: &Config,
     lines: &[String],
@@ -240,8 +240,8 @@ pub fn draw_reading_view(
 ) -> io::Result<()> {
     let end = std::cmp::min(app.offset + app.lines_per_page, lines.len());
     for (row_idx, i) in (app.offset..end).enumerate() {
-        execute!(stdout, MoveTo(0, row_idx as u16))?;
-        print!("{}\r", lines[i]);
+        queue!(stdout, MoveTo(0, row_idx as u16))?;
+        write!(stdout, "{}\r", lines[i])?;
     }
 
     if cfg.show_footer {
@@ -308,24 +308,25 @@ pub fn draw_reading_view(
 
             let footer_color = if cfg.dim_footer { pal.dim } else { pal.fg };
 
-            execute!(
+            queue!(
                 stdout,
                 MoveTo(0, app.term_rows - 1),
                 SetForegroundColor(footer_color)
             )?;
-            print!(
+            write!(
+                stdout,
                 "{padding}{text}\r",
                 padding = " ".repeat(padding_spaces),
                 text = footer_text
-            );
-            execute!(stdout, SetForegroundColor(pal.fg))?;
+            )?;
+            queue!(stdout, SetForegroundColor(pal.fg))?;
         }
     }
     Ok(())
 }
 
 pub fn draw_toc_menu(
-    stdout: &mut io::Stdout,
+    stdout: &mut impl Write,
     app: &mut AppState,
     cfg: &Config,
     spine: &[(String, String)],
@@ -343,7 +344,7 @@ pub fn draw_toc_menu(
     let start_y = app.term_rows.saturating_sub(box_height) / 2;
 
     // FIX: Replaced ANSI \x1b[0m with explicit SetAttribute to stop color leaks
-    execute!(
+    queue!(
         stdout,
         MoveTo(start_x, start_y),
         SetBackgroundColor(pal.bg),
@@ -351,16 +352,16 @@ pub fn draw_toc_menu(
     )?;
     let title = " Table of Contents ";
     let dashes = box_width as usize - 2 - title.len();
-    print!("╭");
-    execute!(stdout, SetAttribute(Attribute::Bold))?;
-    print!("{}", title);
-    execute!(
+    write!(stdout, "╭")?;
+    queue!(stdout, SetAttribute(Attribute::Bold))?;
+    write!(stdout, "{}", title)?;
+    queue!(
         stdout,
         SetAttribute(Attribute::Reset),
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    print!("{}╮", "─".repeat(dashes));
+    write!(stdout, "{}╮", "─".repeat(dashes))?;
 
     let visible_items = box_height as usize - 2;
     if app.toc_cursor < app.toc_top {
@@ -371,7 +372,7 @@ pub fn draw_toc_menu(
 
     let max_title_len = box_width as usize - 6;
     for i in 0..visible_items {
-        execute!(stdout, MoveTo(start_x, start_y + 1 + i as u16))?;
+        queue!(stdout, MoveTo(start_x, start_y + 1 + i as u16))?;
         let idx = app.toc_top + i;
 
         if idx < spine.len() {
@@ -386,32 +387,32 @@ pub fn draw_toc_menu(
             let padded = format!("{:<width$}", chap_title, width = max_title_len);
 
             if idx == app.toc_cursor {
-                execute!(
+                queue!(
                     stdout,
                     SetBackgroundColor(pal.accent),
                     SetForegroundColor(pal.bg)
                 )?;
-                print!("│ > {} │", padded);
-                execute!(
+                write!(stdout, "│ > {} │", padded)?;
+                queue!(
                     stdout,
                     SetBackgroundColor(pal.bg),
                     SetForegroundColor(pal.accent)
                 )?;
             } else {
-                print!("│   {} │", padded);
+                write!(stdout, "│   {} │", padded)?;
             }
         } else {
-            print!("│{}│", " ".repeat(box_width as usize - 2));
+            write!(stdout, "│{}│", " ".repeat(box_width as usize - 2))?;
         }
     }
-    execute!(stdout, MoveTo(start_x, start_y + box_height - 1))?;
-    print!("╰{}╯", "─".repeat(box_width as usize - 2));
-    execute!(stdout, SetForegroundColor(pal.fg))?;
+    queue!(stdout, MoveTo(start_x, start_y + box_height - 1))?;
+    write!(stdout, "╰{}╯", "─".repeat(box_width as usize - 2))?;
+    queue!(stdout, SetForegroundColor(pal.fg))?;
     Ok(())
 }
 
 pub fn draw_settings_menu(
-    stdout: &mut io::Stdout,
+    stdout: &mut impl Write,
     app: &AppState,
     cfg: &Config,
     pal: &Palette,
@@ -427,22 +428,22 @@ pub fn draw_settings_menu(
     let start_y = app.term_rows.saturating_sub(box_height) / 2;
 
     // FIX: Replaced ANSI \x1b[0m with explicit SetAttribute to stop background/foreground wipes
-    execute!(
+    queue!(
         stdout,
         MoveTo(start_x, start_y),
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    print!("╭");
-    execute!(stdout, SetAttribute(Attribute::Bold))?;
-    print!(" Settings ");
-    execute!(
+    write!(stdout, "╭")?;
+    queue!(stdout, SetAttribute(Attribute::Bold))?;
+    write!(stdout, " Settings ")?;
+    queue!(
         stdout,
         SetAttribute(Attribute::Reset),
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    print!("{}╮", "─".repeat(box_width as usize - 12));
+    write!(stdout, "{}╮", "─".repeat(box_width as usize - 12))?;
 
     let labels = [
         "Max Width",
@@ -527,81 +528,89 @@ pub fn draw_settings_menu(
 
     let inner_pad = " ".repeat(box_width as usize - 2);
 
-    execute!(stdout, MoveTo(start_x, start_y + 1))?;
-    print!("│{}│", inner_pad);
-    execute!(stdout, MoveTo(start_x, start_y + 2))?;
-    print!("│");
-    execute!(stdout, SetForegroundColor(pal.dim))?;
-    print!("{:^34}", "--- Main UI ---");
-    execute!(stdout, SetForegroundColor(pal.accent))?;
-    print!("│");
+    queue!(stdout, MoveTo(start_x, start_y + 1))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 2))?;
+    write!(stdout, "│")?;
+    queue!(stdout, SetForegroundColor(pal.dim))?;
+    write!(stdout, "{:^34}", "--- Main UI ---")?;
+    queue!(stdout, SetForegroundColor(pal.accent))?;
+    write!(stdout, "│")?;
 
     for i in 0..5 {
-        execute!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
+        queue!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{:<15} < {:>7} >", labels[i], values[i]);
-            print!("│");
-            execute!(
+            write!(stdout, "│")?;
+            queue!(
                 stdout,
                 SetBackgroundColor(pal.accent),
                 SetForegroundColor(pal.bg)
             )?;
-            print!("{:^34}", content);
-            execute!(
+            write!(stdout, "{:^34}", content)?;
+            queue!(
                 stdout,
                 SetBackgroundColor(pal.bg),
                 SetForegroundColor(pal.accent)
             )?;
-            print!("│");
+            write!(stdout, "│")?;
         } else {
-            print!("│");
-            execute!(stdout, SetForegroundColor(pal.fg))?;
-            print!("{:^34}", format!("{:<15}   {:>7}  ", labels[i], values[i]));
-            execute!(stdout, SetForegroundColor(pal.accent))?;
-            print!("│");
+            write!(stdout, "│")?;
+            queue!(stdout, SetForegroundColor(pal.fg))?;
+            write!(
+                stdout,
+                "{:^34}",
+                format!("{:<15}   {:>7}  ", labels[i], values[i])
+            )?;
+            queue!(stdout, SetForegroundColor(pal.accent))?;
+            write!(stdout, "│")?;
         }
     }
 
-    execute!(stdout, MoveTo(start_x, start_y + 8))?;
-    print!("│{}│", inner_pad);
-    execute!(stdout, MoveTo(start_x, start_y + 9))?;
-    print!("│");
-    execute!(stdout, SetForegroundColor(pal.dim))?;
-    print!("{:^34}", "--- Footer ---");
-    execute!(stdout, SetForegroundColor(pal.accent))?;
-    print!("│");
+    queue!(stdout, MoveTo(start_x, start_y + 8))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 9))?;
+    write!(stdout, "│")?;
+    queue!(stdout, SetForegroundColor(pal.dim))?;
+    write!(stdout, "{:^34}", "--- Footer ---")?;
+    queue!(stdout, SetForegroundColor(pal.accent))?;
+    write!(stdout, "│")?;
 
     for i in 5..14 {
-        execute!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
+        queue!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{:<15} < {:>7} >", labels[i], values[i]);
-            print!("│");
-            execute!(
+            write!(stdout, "│")?;
+            queue!(
                 stdout,
                 SetBackgroundColor(pal.accent),
                 SetForegroundColor(pal.bg)
             )?;
-            print!("{:^34}", content);
-            execute!(
+            write!(stdout, "{:^34}", content)?;
+            queue!(
                 stdout,
                 SetBackgroundColor(pal.bg),
                 SetForegroundColor(pal.accent)
             )?;
-            print!("│");
+            write!(stdout, "│")?;
         } else {
-            print!("│");
-            execute!(stdout, SetForegroundColor(pal.fg))?;
-            print!("{:^34}", format!("{:<15}   {:>7}  ", labels[i], values[i]));
-            execute!(stdout, SetForegroundColor(pal.accent))?;
-            print!("│");
+            write!(stdout, "│")?;
+            queue!(stdout, SetForegroundColor(pal.fg))?;
+            write!(
+                stdout,
+                "{:^34}",
+                format!("{:<15}   {:>7}  ", labels[i], values[i])
+            )?;
+            queue!(stdout, SetForegroundColor(pal.accent))?;
+            write!(stdout, "│")?;
         }
     }
 
-    execute!(stdout, MoveTo(start_x, start_y + 19))?;
-    print!("│{}│", inner_pad);
-    execute!(stdout, MoveTo(start_x, start_y + 20))?;
-    print!("╰{}╯", "─".repeat(box_width as usize - 2));
+    queue!(stdout, MoveTo(start_x, start_y + 19))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 20))?;
+    write!(stdout, "╰{}╯", "─".repeat(box_width as usize - 2))?;
 
-    execute!(stdout, SetForegroundColor(pal.fg))?;
+    queue!(stdout, SetForegroundColor(pal.fg))?;
     Ok(())
 }
