@@ -1,5 +1,6 @@
 mod config;
 mod epub;
+mod paths;
 mod state; // <-- Register our new state module
 mod ui;
 

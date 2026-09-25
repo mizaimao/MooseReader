@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
+
+use crate::paths;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Bookmark {
@@ -14,9 +15,9 @@ pub struct State {
 }
 
 pub fn load_state() -> State {
-    let state_path = "bookmarks.json";
+    let state_path = paths::bookmarks_file();
 
-    if let Ok(file_content) = fs::read_to_string(state_path) {
+    if let Some(file_content) = paths::read_with_legacy(&state_path, "bookmarks.json") {
         if let Ok(state) = serde_json::from_str(&file_content) {
             return state;
         }
@@ -26,8 +27,7 @@ pub fn load_state() -> State {
 }
 
 pub fn save_state(state: &State) {
-    let state_path = "bookmarks.json";
     if let Ok(json) = serde_json::to_string_pretty(state) {
-        let _ = fs::write(state_path, json);
+        let _ = paths::write_atomic(&paths::bookmarks_file(), &json);
     }
 }
