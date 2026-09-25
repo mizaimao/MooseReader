@@ -279,21 +279,119 @@ fn push_entity(out: &mut String, name: &str) -> bool {
     true
 }
 
+/// The escape sequence at the start of `s`, if any: CSI ("\x1b[1m")
+/// or OSC ("\x1b]8;;uri\x1b\\", as used for hyperlinks).
+fn leading_escape(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix('\x1b')?;
+    if let Some(csi) = rest.strip_prefix('[') {
+        let end = csi.find(|c: char| ('\x40'..='\x7e').contains(&c))?;
+        Some(&s[..end + 3])
+    } else if rest.starts_with(']') {
+        let end = rest.find("\x1b\\")?;
+        Some(&s[..end + 3])
+    } else {
+        None
+    }
+}
+
+/// Calls `f` with each escape sequence in `s`, in order.
+fn for_each_escape(s: &str, mut f: impl FnMut(&str)) {
+    let mut rest = s;
+    while let Some(pos) = rest.find('\x1b') {
+        rest = &rest[pos..];
+        match leading_escape(rest) {
+            Some(esc) => {
+                f(esc);
+                rest = &rest[esc.len()..];
+            }
+            None => rest = &rest[1..],
+        }
+    }
+}
+
 fn strip_ansi(s: &str) -> String {
     let mut res = String::with_capacity(s.len());
-    let mut in_esc = false;
-    for c in s.chars() {
-        if in_esc {
-            if c.is_ascii_alphabetic() {
-                in_esc = false;
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        match leading_escape(rest) {
+            Some(esc) => rest = &rest[esc.len()..],
+            None => {
+                res.push(c);
+                rest = &rest[c.len_utf8()..];
             }
-        } else if c == '\x1b' {
-            in_esc = true;
-        } else {
-            res.push(c);
         }
     }
     res
+}
+
+/// Text styles still open at a point in a chapter.
+#[derive(Default)]
+struct OpenStyles {
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    link: Option<String>,
+}
+
+impl OpenStyles {
+    fn apply(&mut self, esc: &str) {
+        match esc {
+            "\x1b[1m" => self.bold = true,
+            "\x1b[2m" => self.dim = true,
+            "\x1b[22m" => {
+                self.bold = false;
+                self.dim = false;
+            }
+            "\x1b[3m" => self.italic = true,
+            "\x1b[23m" => self.italic = false,
+            "\x1b[4m" => self.underline = true,
+            "\x1b[24m" => self.underline = false,
+            osc if osc.starts_with("\x1b]8;") => {
+                // OSC 8 is "\x1b]8;params;uri\x1b\\"; an empty uri ends the link
+                let uri = osc.trim_end_matches("\x1b\\").splitn(3, ';').nth(2);
+                self.link = uri.filter(|u| !u.is_empty()).map(str::to_string);
+            }
+            _ => {}
+        }
+    }
+
+    /// Wraps a line so it reopens the styles it inherits and closes whatever it
+    /// leaves open. Any line can then be drawn first on screen without losing
+    /// its style, and no style leaks into the next line or the footer.
+    fn seal(&mut self, line: &str) -> String {
+        let mut out = String::with_capacity(line.len() + 16);
+        if let Some(uri) = &self.link {
+            out.push_str(&format!("\x1b]8;;{}\x1b\\", uri));
+        }
+        if self.bold {
+            out.push_str("\x1b[1m");
+        }
+        if self.dim {
+            out.push_str("\x1b[2m");
+        }
+        if self.italic {
+            out.push_str("\x1b[3m");
+        }
+        if self.underline {
+            out.push_str("\x1b[4m");
+        }
+        out.push_str(line);
+        for_each_escape(line, |esc| self.apply(esc));
+        if self.bold || self.dim {
+            out.push_str("\x1b[22m");
+        }
+        if self.italic {
+            out.push_str("\x1b[23m");
+        }
+        if self.underline {
+            out.push_str("\x1b[24m");
+        }
+        if self.link.is_some() {
+            out.push_str("\x1b]8;;\x1b\\");
+        }
+        out
+    }
 }
 
 fn read_zip_file<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<String> {
@@ -501,11 +599,14 @@ pub fn load_chapter<R: Read + Seek>(
 
     // Track empty lines to prevent spamming the terminal with gaps
     let mut last_was_empty = true;
+    let mut styles = OpenStyles::default();
 
     for line in clean.lines() {
         let trimmed = line.trim();
 
-        if trimmed.is_empty() {
+        // A line of bare style codes shows nothing, but its codes still count
+        if strip_ansi(trimmed).trim().is_empty() {
+            for_each_escape(trimmed, |esc| styles.apply(esc));
             // Only push a single empty line, and only if we haven't just pushed one
             if !last_was_empty {
                 wrapped_lines.push(String::new());
@@ -517,7 +618,7 @@ pub fn load_chapter<R: Read + Seek>(
         last_was_empty = false;
 
         if trimmed.contains('\x1e') {
-            let clean_line = trimmed.replace('\x1e', "");
+            let clean_line = styles.seal(&trimmed.replace('\x1e', ""));
             let visible_len = strip_ansi(&clean_line).chars().count();
 
             let pad = if wrap_width > visible_len {
@@ -529,7 +630,7 @@ pub fn load_chapter<R: Read + Seek>(
         } else {
             let wrapped = textwrap::wrap(trimmed, wrap_width);
             for w in wrapped {
-                wrapped_lines.push(format!("{}{}", indent, w));
+                wrapped_lines.push(format!("{}{}", indent, styles.seal(&w)));
             }
         }
     }
@@ -685,5 +786,35 @@ mod tests {
         assert_eq!(resolve_href("content.opf", "./ch1.html"), "ch1.html");
         assert_eq!(resolve_href("OEBPS/content.opf", "/root.html"), "root.html");
         assert_eq!(percent_decode("caf%C3%A9 100%"), "café 100%");
+    }
+
+    #[test]
+    fn strip_ansi_skips_hyperlinks() {
+        let s = "\x1b]8;;https://x.org/a\x1b\\\x1b[4mlink\x1b[24m\x1b]8;;\x1b\\ text";
+        assert_eq!(strip_ansi(s), "link text");
+    }
+
+    #[test]
+    fn styles_carry_across_wrapped_lines() {
+        let html =
+            "<p><i>one two three four five six</i> plain <a href=\"n.html\">a long link</a></p>";
+        let mut archive = epub(&[("c.html", html)]);
+        let lines = load_chapter(&mut archive, "c.html", 10, 0);
+        assert!(lines.len() >= 5, "{:?}", lines);
+        for line in &lines {
+            let text = strip_ansi(line);
+            if text.contains("one") || text.contains("three") || text.contains("five") {
+                assert!(
+                    line.starts_with("\x1b[3m") && line.ends_with("\x1b[23m"),
+                    "{:?}",
+                    line
+                );
+            }
+            if text.contains("link") {
+                assert!(line.contains("\x1b]8;;n.html\x1b\\"), "{:?}", line);
+                assert!(line.ends_with("\x1b]8;;\x1b\\"), "{:?}", line);
+            }
+        }
+        assert!(lines.iter().any(|l| l.starts_with("plain")), "{:?}", lines);
     }
 }
