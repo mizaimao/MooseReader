@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 use super::AppState;
 use crate::config::{Alignment, Config, ProgressMode, Theme};
+use crate::i18n::{Text, tr};
 use crate::width;
 
 pub struct Palette {
@@ -367,7 +368,10 @@ pub fn draw_toc_menu(
         SetBackgroundColor(pal.bg),
         SetForegroundColor(pal.accent)
     )?;
-    let title = width::truncate(" Table of Contents ", box_width_usize - 2);
+    let title = width::truncate(
+        &format!(" {} ", tr(Text::TableOfContents)),
+        box_width_usize - 2,
+    );
     let dashes = (box_width_usize - 2).saturating_sub(width::width(&title));
     write!(stdout, "╭")?;
     queue!(stdout, SetAttribute(Attribute::Bold))?;
@@ -428,7 +432,7 @@ pub fn draw_settings_menu(
     pal: &Palette,
 ) -> io::Result<()> {
     let box_width: u16 = 36;
-    let box_height: u16 = 21;
+    let box_height: u16 = 22;
 
     let text_center_x = cfg.margin_left + (app.dynamic_width / 2);
     let mut start_x = text_center_x.saturating_sub((box_width / 2) as usize) as u16;
@@ -446,7 +450,7 @@ pub fn draw_settings_menu(
     )?;
     write!(stdout, "╭")?;
     queue!(stdout, SetAttribute(Attribute::Bold))?;
-    let title = width::truncate(" Settings ", box_width as usize - 2);
+    let title = width::truncate(&format!(" {} ", tr(Text::Settings)), box_width as usize - 2);
     write!(stdout, "{}", title)?;
     queue!(
         stdout,
@@ -461,33 +465,34 @@ pub fn draw_settings_menu(
     )?;
 
     let labels = [
-        "Max Width",
-        "Margin Left",
-        "Margin Right",
-        "Scroll Lines",
-        "Theme",
-        "Show Footer",
-        "Dim Footer",
-        "Footer Align",
-        "Chapter Title",
-        "Progress Mode",
-        "Progress Bar",
-        "Bar Length",
-        "Progress %",
-        "Chapter Loc",
+        tr(Text::MaxWidth),
+        tr(Text::MarginLeft),
+        tr(Text::MarginRight),
+        tr(Text::ScrollLines),
+        tr(Text::Theme),
+        tr(Text::Language),
+        tr(Text::ShowFooter),
+        tr(Text::DimFooter),
+        tr(Text::FooterAlign),
+        tr(Text::ChapterTitle),
+        tr(Text::ProgressMode),
+        tr(Text::ProgressBar),
+        tr(Text::BarLength),
+        tr(Text::ProgressPercent),
+        tr(Text::ChapterLoc),
     ];
 
     let align_str = match cfg.footer_align {
-        Alignment::Left => "Left",
-        Alignment::Center => "Center",
-        Alignment::Right => "Right",
+        Alignment::Left => tr(Text::Left),
+        Alignment::Center => tr(Text::Center),
+        Alignment::Right => tr(Text::Right),
     };
     let prog_mode_str = match cfg.progress_mode {
-        ProgressMode::Chapter => "Chapter",
-        ProgressMode::Overall => "Overall",
+        ProgressMode::Chapter => tr(Text::Chapter),
+        ProgressMode::Overall => tr(Text::Overall),
     };
     let theme_str = match cfg.theme {
-        Theme::Default => "Terminal",
+        Theme::Default => tr(Text::TerminalTheme),
         Theme::Sepia => "Sepia",
         Theme::Dracula => "Dracula",
         Theme::Hacker => "Hacker",
@@ -499,6 +504,7 @@ pub fn draw_settings_menu(
         Theme::Catppuccin => "Catppuccin",
         Theme::Oceanic => "Oceanic",
     };
+    let on_off = |on: bool| tr(if on { Text::On } else { Text::Off }).to_string();
 
     let values = [
         cfg.max_width.to_string(),
@@ -506,39 +512,16 @@ pub fn draw_settings_menu(
         cfg.margin_right.to_string(),
         cfg.scroll_by_lines.to_string(),
         theme_str.to_string(),
-        if cfg.show_footer {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
-        if cfg.dim_footer {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
+        cfg.language.name().to_string(),
+        on_off(cfg.show_footer),
+        on_off(cfg.dim_footer),
         align_str.to_string(),
-        if cfg.show_chapter_title {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
+        on_off(cfg.show_chapter_title),
         prog_mode_str.to_string(),
-        if cfg.show_progress_bar {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
+        on_off(cfg.show_progress_bar),
         cfg.progress_bar_length.to_string(),
-        if cfg.show_progress_percentage {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
-        if cfg.show_chapter_location {
-            "On".to_string()
-        } else {
-            "Off".to_string()
-        },
+        on_off(cfg.show_progress_percentage),
+        on_off(cfg.show_chapter_location),
     ];
 
     let inner_pad = " ".repeat(box_width as usize - 2);
@@ -550,11 +533,15 @@ pub fn draw_settings_menu(
     queue!(stdout, MoveTo(start_x, start_y + 2))?;
     write!(stdout, "│")?;
     queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(stdout, "{}", width::center("--- Main UI ---", 34))?;
+    write!(
+        stdout,
+        "{}",
+        width::center(&format!("--- {} ---", tr(Text::MainUi)), 34)
+    )?;
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
-    for i in 0..5 {
+    for i in 0..6 {
         queue!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{} < {} >", label(i), value(i));
@@ -581,16 +568,20 @@ pub fn draw_settings_menu(
         }
     }
 
-    queue!(stdout, MoveTo(start_x, start_y + 8))?;
-    write!(stdout, "│{}│", inner_pad)?;
     queue!(stdout, MoveTo(start_x, start_y + 9))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 10))?;
     write!(stdout, "│")?;
     queue!(stdout, SetForegroundColor(pal.dim))?;
-    write!(stdout, "{}", width::center("--- Footer ---", 34))?;
+    write!(
+        stdout,
+        "{}",
+        width::center(&format!("--- {} ---", tr(Text::Footer)), 34)
+    )?;
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
-    for i in 5..14 {
+    for i in 6..15 {
         queue!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{} < {} >", label(i), value(i));
@@ -617,9 +608,9 @@ pub fn draw_settings_menu(
         }
     }
 
-    queue!(stdout, MoveTo(start_x, start_y + 19))?;
-    write!(stdout, "│{}│", inner_pad)?;
     queue!(stdout, MoveTo(start_x, start_y + 20))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 21))?;
     write!(stdout, "╰{}╯", "─".repeat(box_width as usize - 2))?;
 
     queue!(stdout, SetForegroundColor(pal.fg))?;

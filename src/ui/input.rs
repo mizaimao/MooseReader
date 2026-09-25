@@ -2,9 +2,10 @@ use crossterm::event::KeyCode;
 use std::fs::File;
 use zip::ZipArchive;
 
-use super::{AppMode, AppState};
+use super::{AppMode, AppState, SETTINGS_ITEMS};
 use crate::config::{Alignment, Config, ProgressMode, Theme, save_config};
 use crate::epub::load_chapter;
+use crate::i18n;
 
 pub fn handle_reading_input(
     code: KeyCode,
@@ -160,10 +161,12 @@ pub fn handle_settings_input(
             app.mode = AppMode::Reading;
         }
 
-        KeyCode::Char('j') | KeyCode::Down => app.settings_cursor = (app.settings_cursor + 1) % 14,
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.settings_cursor = (app.settings_cursor + 1) % SETTINGS_ITEMS
+        }
         KeyCode::Char('k') | KeyCode::Up => {
             app.settings_cursor = if app.settings_cursor == 0 {
-                13
+                SETTINGS_ITEMS - 1
             } else {
                 app.settings_cursor - 1
             }
@@ -210,30 +213,36 @@ pub fn handle_settings_input(
                         Theme::Oceanic => Theme::Catppuccin,
                     }
                 }
-                5 => cfg.show_footer = !cfg.show_footer,
-                6 => cfg.dim_footer = !cfg.dim_footer,
-                7 => {
+                5 => {
+                    cfg.language = cfg.language.prev();
+                    i18n::set(cfg.language);
+                    // Reloads the chapter so its [Image] labels change language too
+                    text_changed = true;
+                }
+                6 => cfg.show_footer = !cfg.show_footer,
+                7 => cfg.dim_footer = !cfg.dim_footer,
+                8 => {
                     cfg.footer_align = match cfg.footer_align {
                         Alignment::Left => Alignment::Right,
                         Alignment::Center => Alignment::Left,
                         Alignment::Right => Alignment::Center,
                     }
                 }
-                8 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                9 => {
+                9 => cfg.show_chapter_title = !cfg.show_chapter_title,
+                10 => {
                     cfg.progress_mode = match cfg.progress_mode {
                         ProgressMode::Chapter => ProgressMode::Overall,
                         ProgressMode::Overall => ProgressMode::Chapter,
                     }
                 }
-                10 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                11 => {
+                11 => cfg.show_progress_bar = !cfg.show_progress_bar,
+                12 => {
                     if cfg.progress_bar_length > 5 {
                         cfg.progress_bar_length -= 1;
                     }
                 }
-                12 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                13 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                13 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                14 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed {
@@ -282,30 +291,36 @@ pub fn handle_settings_input(
                         Theme::Oceanic => Theme::Default,
                     }
                 }
-                5 => cfg.show_footer = !cfg.show_footer,
-                6 => cfg.dim_footer = !cfg.dim_footer,
-                7 => {
+                5 => {
+                    cfg.language = cfg.language.next();
+                    i18n::set(cfg.language);
+                    // Reloads the chapter so its [Image] labels change language too
+                    text_changed = true;
+                }
+                6 => cfg.show_footer = !cfg.show_footer,
+                7 => cfg.dim_footer = !cfg.dim_footer,
+                8 => {
                     cfg.footer_align = match cfg.footer_align {
                         Alignment::Left => Alignment::Center,
                         Alignment::Center => Alignment::Right,
                         Alignment::Right => Alignment::Left,
                     }
                 }
-                8 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                9 => {
+                9 => cfg.show_chapter_title = !cfg.show_chapter_title,
+                10 => {
                     cfg.progress_mode = match cfg.progress_mode {
                         ProgressMode::Chapter => ProgressMode::Overall,
                         ProgressMode::Overall => ProgressMode::Chapter,
                     }
                 }
-                10 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                11 => {
+                11 => cfg.show_progress_bar = !cfg.show_progress_bar,
+                12 => {
                     if cfg.progress_bar_length < 100 {
                         cfg.progress_bar_length += 1;
                     }
                 }
-                12 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                13 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                13 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                14 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed {
