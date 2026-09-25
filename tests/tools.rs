@@ -1,4 +1,4 @@
-//! The helper scripts: tools/pack-epub.
+//! The helper scripts: tools/pack-epub and the moose launcher.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -128,4 +128,18 @@ fn refuses_folders_that_are_not_books() {
     assert_eq!(code, 1);
     assert!(errors.contains("not an EPUB folder"), "{errors}");
     assert!(!dir.join("notes.epub").exists());
+}
+
+#[test]
+fn the_launcher_explains_itself_without_building() {
+    let run = |args: &[&str]| {
+        Command::new(root().join("moose"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let bare = run(&[]);
+    assert_eq!(bare.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&bare.stderr).starts_with("Usage: moose BOOK"));
+    assert_eq!(run(&["--help"]).status.code(), Some(0));
 }
