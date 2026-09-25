@@ -14,7 +14,7 @@ Dedicated to Donkey.
 * **Live Layout Engine:** Dynamically adjust your reading settings on the go.
 * **Multiple Themes:** Beautiful, pre-built TrueColor profiles including Dracula, Nord, Solarized, Catppuccin, Gruvbox, etc.
 * **Keyboard-Native Navigation:** Keep your hands on the home row with full `h` `j` `k` `l` support.
-* **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking, saved automatically as you read.
+* **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking, saved automatically as you read. Books are recognized by their content, so moving or renaming a file keeps your place.
 * **Interactive Table of Contents:** A pop-up TUI pane to seamlessly navigate chapters.
 * **Customizable Footer:** Toggle chapter titles, reading progress (chapter vs. overall), percentage read, and visual progress bars `[████░░░░]`. 
 
