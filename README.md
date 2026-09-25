@@ -16,6 +16,7 @@ Dedicated to Donkey.
 * **Keyboard-Native Navigation:** Keep your hands on the home row with full `h` `j` `k` `l` support.
 * **Smart State Persistence:** MooseReader remembers exactly where you left off by using a percentage-based bookmarking, saved automatically as you read. Books are recognized by their content, so moving or renaming a file keeps your place.
 * **Interactive Table of Contents:** A pop-up TUI pane to seamlessly navigate chapters.
+* **Pictures:** Shown at full quality in Ghostty and kitty (kitty graphics protocol), as colored blocks in other true-color terminals, or as `[Image]` labels. Pick Auto, Kitty, Blocks or Off under Images in Settings. Inside tmux, Auto uses blocks.
 * **Multi-language Interface:** Menus and messages in English, 简体中文, 繁體中文, 日本語, 한국어, Русский, Español, Français and Deutsch, following your system language unless you pick one in Settings. Chinese, Japanese and Korean books lay out by character width.
 * **Customizable Footer:** Toggle chapter titles, reading progress (chapter vs. overall), percentage read, and visual progress bars `[████░░░░]`. 
 

@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 use zip::ZipArchive;
 
 use crate::i18n::{Text, tr};
+use crate::images::{self, Layout};
 use crate::width;
 
 const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
@@ -33,6 +34,26 @@ fn is_block(tag: &str) -> bool {
             | "address"
             | "center"
     )
+}
+
+/// The value of attribute `name` in the text of a tag, quoted either way.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(pos) = tag[from..].find(name) {
+        let start = from + pos;
+        from = start + name.len();
+        // Whole attribute names only, so "href" doesn't match inside "xlink:href"
+        if !tag[..start].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(value) = tag[from..].strip_prefix('=') else {
+            continue;
+        };
+        let quote = value.chars().next().filter(|q| *q == '"' || *q == '\'')?;
+        let value = &value[1..];
+        return value.find(quote).map(|end| &value[..end]);
+    }
+    None
 }
 
 fn format_html_for_terminal(input: &str) -> String {
@@ -148,23 +169,17 @@ fn format_html_for_terminal(input: &str) -> String {
                 }
 
                 "img" | "image" => {
-                    output.push_str(&format!("\n\x1b[2m[{}]\x1b[22m\n", tr(Text::Image)));
+                    // Kept as a marker line; the chapter layout decides how to show it
+                    let src = attribute(&current_tag, "src")
+                        .or_else(|| attribute(&current_tag, "xlink:href"))
+                        .or_else(|| attribute(&current_tag, "href"))
+                        .unwrap_or("");
+                    output.push_str(&format!("\n{}{}\n", images::MARKER, src));
                     at_space = true;
                 }
 
                 "a" => {
-                    let mut href = "";
-                    if let Some(start) = current_tag.find("href=\"") {
-                        let rest = &current_tag[start + 6..];
-                        if let Some(end) = rest.find('"') {
-                            href = &rest[..end];
-                        }
-                    } else if let Some(start) = current_tag.find("href='") {
-                        let rest = &current_tag[start + 6..];
-                        if let Some(end) = rest.find('\'') {
-                            href = &rest[..end];
-                        }
-                    }
+                    let href = attribute(&current_tag, "href").unwrap_or("");
                     // Links into the book's own files and bare anchors have nowhere
                     // for the terminal to go, so only web and mail links stay links
                     if ["http://", "https://", "mailto:"]
@@ -409,10 +424,14 @@ impl OpenStyles {
 }
 
 fn read_zip_file<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<String> {
+    read_zip_bytes(archive, name).map(|bytes| decode_text(&bytes))
+}
+
+pub fn read_zip_bytes<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
     let mut file = archive.by_name(name).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
-    Some(decode_text(&bytes))
+    Some(bytes)
 }
 
 /// Decodes a text file from the book. EPUB allows UTF-8 and UTF-16 (told apart
@@ -658,6 +677,9 @@ fn first_line<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Option
     let html = read_zip_file(archive, path)?;
     let text = strip_ansi(&format_html_for_terminal(&html).replace('\x1e', ""));
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.starts_with(images::MARKER) {
+        return Some(format!("[{}]", tr(Text::Image)));
+    }
     if width::width(line) <= MAX_COLUMNS {
         return Some(line.to_string());
     }
@@ -699,6 +721,7 @@ pub fn load_chapter<R: Read + Seek>(
     path: &str,
     wrap_width: usize,
     margin_left: usize,
+    layout: &Layout,
 ) -> Vec<String> {
     let raw_html = read_zip_file(archive, path).unwrap_or_default();
     let clean = format_html_for_terminal(&raw_html);
@@ -725,6 +748,16 @@ pub fn load_chapter<R: Read + Seek>(
         }
 
         last_was_empty = false;
+
+        if let Some(src) = trimmed.strip_prefix(images::MARKER) {
+            let picture = resolve_href(path, src);
+
+            let lines = images::picture_lines(archive, &picture, wrap_width, margin_left, layout);
+
+            wrapped_lines.extend(lines);
+
+            continue;
+        }
 
         if trimmed.contains('\x1e') {
             // Headings wrap like body text, each line centered by its width on screen
@@ -805,12 +838,17 @@ mod tests {
     }
 
     fn epub(files: &[(&str, &str)]) -> ZipArchive<std::io::Cursor<Vec<u8>>> {
+        let files = files.iter().map(|(name, body)| (*name, body.as_bytes()));
+        epub_bytes(&files.collect::<Vec<_>>())
+    }
+
+    fn epub_bytes(files: &[(&str, &[u8])]) -> ZipArchive<std::io::Cursor<Vec<u8>>> {
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for (name, body) in files {
             zip.start_file(*name, zip::write::SimpleFileOptions::default())
                 .unwrap();
-            zip.write_all(body.as_bytes()).unwrap();
+            zip.write_all(body).unwrap();
         }
         ZipArchive::new(zip.finish().unwrap()).unwrap()
     }
@@ -860,7 +898,7 @@ mod tests {
         .map(|(p, t)| (p.to_string(), t.to_string()));
         assert_eq!(spine, expected);
         assert_eq!(
-            load_chapter(&mut archive, &spine[1].0, 40, 0),
+            load_chapter(&mut archive, &spine[1].0, 40, 0, &Layout::labels()),
             ["Hello there"]
         );
     }
@@ -911,7 +949,7 @@ mod tests {
     fn styles_carry_across_wrapped_lines() {
         let html = "<p><i>one two three four five six</i> plain <a href=\"https://x.org/n\">a long link</a></p>";
         let mut archive = epub(&[("c.html", html)]);
-        let lines = load_chapter(&mut archive, "c.html", 10, 0);
+        let lines = load_chapter(&mut archive, "c.html", 10, 0, &Layout::labels());
         assert!(lines.len() >= 5, "{:?}", lines);
         for line in &lines {
             let text = strip_ansi(line);
@@ -1008,5 +1046,67 @@ mod tests {
             decode_text(b"caf\xE9 \x93quoted\x94 \x80"),
             "café “quoted” €"
         );
+    }
+
+    #[test]
+    fn attributes_match_whole_names() {
+        let tag = r#"image width="10" xlink:href='a.jpg'"#;
+        assert_eq!(attribute(tag, "xlink:href"), Some("a.jpg"));
+        assert_eq!(attribute(tag, "href"), None);
+        assert_eq!(
+            attribute(r#"img alt="x" src="b.png""#, "src"),
+            Some("b.png")
+        );
+    }
+
+    #[test]
+    fn pictures_follow_the_layout() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([200, 30, 30, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let html = r#"<p>Before</p><img src="../img/red%20dot.png"/>
+            <svg><image xlink:href="../img/red%20dot.png"/></svg><img src="missing.png"/><p>After</p>"#;
+        let mut archive = epub_bytes(&[
+            ("OEBPS/text/c.html", html.as_bytes()),
+            ("OEBPS/img/red dot.png", png.get_ref()),
+        ]);
+        let chapter = |archive: &mut ZipArchive<_>, mode| {
+            let layout = Layout {
+                mode,
+                cell: (10, 20),
+                max_rows: 30,
+                background: [0, 0, 0],
+            };
+            load_chapter(archive, "OEBPS/text/c.html", 20, 2, &layout)
+        };
+        let labels = |lines: &[String]| {
+            let is_label = |l: &&String| strip_ansi(l).trim() == "[Image]";
+            lines.iter().filter(is_label).count()
+        };
+
+        // 40 px square on 10x20 px cells: 4 columns by 2 rows, centered in 20 columns
+        let lines = chapter(&mut archive, images::Mode::Kitty);
+        let rows: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.starts_with(images::MARKER))
+            .collect();
+        assert_eq!(rows.len(), 4, "{:?}", lines);
+        let first = format!(
+            "{}0\x1f2\x1f10\x1f4\x1fOEBPS/img/red dot.png",
+            images::MARKER
+        );
+        assert_eq!(rows[0], &first);
+        assert_eq!(labels(&lines), 1, "the missing picture gets a label");
+
+        let lines = chapter(&mut archive, images::Mode::Blocks);
+        let blocks: Vec<&String> = lines.iter().filter(|l| l.contains('▀')).collect();
+        assert_eq!(blocks.len(), 4);
+        assert!(blocks[0].starts_with(&format!("{}\x1b[38;2;200;30;30m", " ".repeat(10))));
+        assert_eq!(strip_ansi(blocks[0]).matches('▀').count(), 4);
+        assert_eq!(labels(&lines), 1);
+
+        let lines = chapter(&mut archive, images::Mode::Labels);
+        assert_eq!(labels(&lines), 3);
     }
 }
