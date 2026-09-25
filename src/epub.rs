@@ -451,10 +451,12 @@ fn resolve_href(base_file: &str, href: &str) -> String {
     parts.join("/")
 }
 
-/// Adds titles from an EPUB 3 navigation document's table of contents.
+/// Adds titles from one list of an EPUB 3 navigation document:
+/// "toc" for the table of contents, "landmarks" for pages like the cover.
 fn nav_titles<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     nav_path: &str,
+    kind: &str,
     titles: &mut HashMap<String, String>,
 ) -> Option<()> {
     let xml = read_zip_file(archive, nav_path)?;
@@ -463,15 +465,16 @@ fn nav_titles<R: Read + Seek>(
         .descendants()
         .filter(|n| n.tag_name().name() == "nav")
         .collect();
-    let toc = navs
+    let list = navs
         .iter()
         .find(|n| {
             n.attribute((EPUB_OPS_NS, "type"))
-                .is_some_and(|t| t.split_whitespace().any(|t| t == "toc"))
+                .is_some_and(|t| t.split_whitespace().any(|t| t == kind))
         })
-        .or(navs.first())?;
+        // Some books leave epub:type off their table of contents
+        .or(if kind == "toc" { navs.first() } else { None })?;
 
-    for link in toc.descendants().filter(|n| n.tag_name().name() == "a") {
+    for link in list.descendants().filter(|n| n.tag_name().name() == "a") {
         if let Some(href) = link.attribute("href") {
             let text: String = link
                 .descendants()
@@ -561,28 +564,61 @@ pub fn get_epub_spine<R: Read + Seek>(
         })
         .map(|(path, _)| path.clone());
 
-    // EPUB 3 books may carry both; the navigation document wins and the NCX fills gaps
+    // First found wins: the table of contents (EPUB 3, then EPUB 2), then the
+    // landmarks or guide entries that name pages such as the cover
     let mut titles = HashMap::new();
     if let Some(nav_path) = &nav_path {
-        nav_titles(archive, nav_path, &mut titles);
+        nav_titles(archive, nav_path, "toc", &mut titles);
     }
     if let Some(ncx_path) = &ncx_path {
         ncx_titles(archive, ncx_path, &mut titles);
     }
+    if let Some(nav_path) = &nav_path {
+        nav_titles(archive, nav_path, "landmarks", &mut titles);
+    }
+    for reference in opf_doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "reference")
+    {
+        if let (Some(href), Some(title)) =
+            (reference.attribute("href"), reference.attribute("title"))
+        {
+            titles
+                .entry(resolve_href(opf_path, href))
+                .or_insert_with(|| title.trim().to_string());
+        }
+    }
 
-    let spine = spine_node
+    let mut spine = Vec::new();
+    for itemref in spine_node
         .descendants()
         .filter(|n| n.tag_name().name() == "itemref")
-        .filter_map(|n| manifest.get(n.attribute("idref")?))
-        .map(|(path, _)| {
-            let title = titles
-                .get(path)
-                .cloned()
-                .unwrap_or_else(|| "Section".to_string());
-            (path.clone(), title)
-        })
-        .collect();
+    {
+        let Some((path, _)) = itemref.attribute("idref").and_then(|id| manifest.get(id)) else {
+            continue;
+        };
+        let title = match titles.get(path) {
+            Some(title) => title.clone(),
+            None => first_line(archive, path).unwrap_or_else(|| "Section".to_string()),
+        };
+        spine.push((path.clone(), title));
+    }
     Some(spine)
+}
+
+/// Names a page that no table of contents lists by its first line of text.
+fn first_line<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Option<String> {
+    const MAX_CHARS: usize = 40;
+    let html = read_zip_file(archive, path)?;
+    let text = strip_ansi(&format_html_for_terminal(&html).replace('\x1e', ""));
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if line.chars().count() <= MAX_CHARS {
+        return Some(line.to_string());
+    }
+    let cut: String = line.chars().take(MAX_CHARS - 1).collect();
+    // Break at a word boundary when there is one
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    Some(format!("{}…", cut.trim_end()))
 }
 
 pub fn load_chapter<R: Read + Seek>(
@@ -717,12 +753,16 @@ mod tests {
     fn epub3_nav_titles_and_encoded_paths() {
         let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>
             <item id="nav" href="nav/toc.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+            <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
             <item id="c1" href="Text/Chapter%20One.xhtml" media-type="application/xhtml+xml"/>
             <item id="c2" href="Text/two.xhtml" media-type="application/xhtml+xml"/>
-          </manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
+          </manifest><spine><itemref idref="cover"/><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
         let nav = r#"<!DOCTYPE html>
           <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
-            <nav epub:type="landmarks"><ol><li><a href="../Text/two.xhtml">Wrong list</a></li></ol></nav>
+            <nav epub:type="landmarks"><ol>
+              <li><a epub:type="cover" href="../cover.xhtml">Cover</a></li>
+              <li><a href="../Text/two.xhtml">Wrong list</a></li>
+            </ol></nav>
             <nav epub:type="toc"><ol>
               <li><a href="../Text/Chapter%20One.xhtml#start"><span>Chapter</span> One</a></li>
               <li><a href="../Text/two.xhtml">Chapter Two</a></li>
@@ -732,6 +772,7 @@ mod tests {
             ("META-INF/container.xml", CONTAINER),
             ("OEBPS/content.opf", opf),
             ("OEBPS/nav/toc.xhtml", nav),
+            ("OEBPS/cover.xhtml", r#"<img src="cover.jpg"/>"#),
             (
                 "OEBPS/Text/Chapter One.xhtml",
                 "<html><body><p>Hello there</p></body></html>",
@@ -741,13 +782,14 @@ mod tests {
 
         let spine = get_epub_spine(&mut archive).unwrap();
         let expected = [
+            ("OEBPS/cover.xhtml", "Cover"),
             ("OEBPS/Text/Chapter One.xhtml", "Chapter One"),
             ("OEBPS/Text/two.xhtml", "Chapter Two"),
         ]
         .map(|(p, t)| (p.to_string(), t.to_string()));
         assert_eq!(spine, expected);
         assert_eq!(
-            load_chapter(&mut archive, &spine[0].0, 40, 0),
+            load_chapter(&mut archive, &spine[1].0, 40, 0),
             ["Hello there"]
         );
     }
@@ -816,5 +858,46 @@ mod tests {
             }
         }
         assert!(lines.iter().any(|l| l.starts_with("plain")), "{:?}", lines);
+    }
+
+    #[test]
+    fn untitled_pages_use_guide_then_first_line() {
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest>
+            <item id="cover" href="cover.html" media-type="application/xhtml+xml"/>
+            <item id="letter" href="letter.html" media-type="application/xhtml+xml"/>
+            <item id="long" href="long.html" media-type="application/xhtml+xml"/>
+            <item id="blank" href="blank.html" media-type="application/xhtml+xml"/>
+          </manifest><spine>
+            <itemref idref="cover"/><itemref idref="letter"/><itemref idref="long"/><itemref idref="blank"/>
+          </spine><guide><reference href="cover.html" title="Cover Image" type="cover"/></guide></package>"#;
+        let mut archive = epub(&[
+            ("META-INF/container.xml", CONTAINER),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/cover.html", r#"<img src="c.jpg"/>"#),
+            (
+                "OEBPS/letter.html",
+                "<p>\n  Dear   Muscovites!</p><p>More</p>",
+            ),
+            (
+                "OEBPS/long.html",
+                "<p>A first line that runs on far past forty characters</p>",
+            ),
+            ("OEBPS/blank.html", "<p> </p>"),
+        ]);
+
+        let titles: Vec<String> = get_epub_spine(&mut archive)
+            .unwrap()
+            .into_iter()
+            .map(|(_, title)| title)
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Cover Image",
+                "Dear Muscovites!",
+                "A first line that runs on far past…",
+                "Section"
+            ]
+        );
     }
 }
