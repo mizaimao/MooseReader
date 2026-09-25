@@ -16,7 +16,7 @@ use std::io::{self, Write};
 use zip::ZipArchive;
 
 use crate::config::Config;
-use crate::epub::load_chapter;
+use crate::epub::{chapter_starts, load_chapter};
 use crate::state::{Bookmark, State, save_state};
 
 #[derive(PartialEq)]
@@ -37,6 +37,8 @@ pub struct AppState {
     pub settings_cursor: usize,
     pub term_cols: u16,
     pub term_rows: u16,
+    /// Where each chapter starts as a fraction of the book, plus a final 1.0
+    pub chapter_starts: Vec<f64>,
 }
 
 /// Raw mode on the alternate screen, undone on drop so an early return
@@ -104,6 +106,7 @@ pub fn run(
         settings_cursor: 0,
         term_cols,
         term_rows,
+        chapter_starts: chapter_starts(&mut archive, &spine),
     };
 
     let progress = if let Some(bookmark) = state.books.get(&book_path) {

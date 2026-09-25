@@ -259,7 +259,9 @@ pub fn draw_reading_view(
             let prog_val = match cfg.progress_mode {
                 ProgressMode::Chapter => chap_prog * 100.0,
                 ProgressMode::Overall => {
-                    ((app.chapter_index as f64 + chap_prog) / spine.len() as f64) * 100.0
+                    let start = app.chapter_starts[app.chapter_index];
+                    let end = app.chapter_starts[app.chapter_index + 1];
+                    (start + chap_prog * (end - start)) * 100.0
                 }
             }
             .clamp(0.0, 100.0);

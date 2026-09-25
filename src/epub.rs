@@ -632,6 +632,32 @@ fn first_line<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Option
     Some(format!("{}…", cut.trim_end()))
 }
 
+/// Where each chapter starts as a fraction of the whole book, weighted by each
+/// file's uncompressed size, as Readium's positions list is, so image-only pages
+/// barely move the overall percentage. Ends with an extra 1.0.
+pub fn chapter_starts<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    spine: &[(String, String)],
+) -> Vec<f64> {
+    let sizes: Vec<u64> = spine
+        .iter()
+        .map(|(path, _)| archive.by_name(path).map(|f| f.size()).unwrap_or(0))
+        .collect();
+    let total: u64 = sizes.iter().sum();
+    if total == 0 {
+        let count = spine.len().max(1) as f64;
+        return (0..=spine.len()).map(|i| i as f64 / count).collect();
+    }
+    let mut starts = Vec::with_capacity(sizes.len() + 1);
+    let mut before = 0;
+    for size in sizes {
+        starts.push(before as f64 / total as f64);
+        before += size;
+    }
+    starts.push(1.0);
+    starts
+}
+
 pub fn load_chapter<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     path: &str,
@@ -920,5 +946,14 @@ mod tests {
             out,
             "Chapter anchor \x1b]8;;https://a.org/?q=1&r=2\x1b\\\x1b[4mweb\x1b[24m\x1b]8;;\x1b\\"
         );
+    }
+
+    #[test]
+    fn chapter_starts_follow_file_size() {
+        let spine = [("a.html", "A"), ("b.html", "B")].map(|(p, t)| (p.to_string(), t.to_string()));
+        let mut archive = epub(&[("a.html", &"x".repeat(100)), ("b.html", &"x".repeat(300))]);
+        assert_eq!(chapter_starts(&mut archive, &spine), [0.0, 0.25, 1.0]);
+        let mut empty = epub(&[("a.html", ""), ("b.html", "")]);
+        assert_eq!(chapter_starts(&mut empty, &spine), [0.0, 0.5, 1.0]);
     }
 }
