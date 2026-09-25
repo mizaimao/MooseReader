@@ -1,17 +1,17 @@
 use crossterm::event::KeyCode;
-use std::fs::File;
+use std::io::{Read, Seek};
 use zip::ZipArchive;
 
 use super::settings::ROWS;
-use super::{AppMode, AppState, load_current};
+use super::{AppMode, AppState, load_current, page_height, text_width};
 use crate::config::{Config, save_config};
 
-pub fn handle_reading_input(
+pub fn handle_reading_input<R: Read + Seek>(
     code: KeyCode,
     app: &mut AppState,
     cfg: &mut Config,
     lines: &mut Vec<String>,
-    archive: &mut ZipArchive<File>,
+    archive: &mut ZipArchive<R>,
     spine: &[(String, String)],
 ) -> bool {
     match code {
@@ -26,8 +26,7 @@ pub fn handle_reading_input(
         }
         KeyCode::Char('F') | KeyCode::Char('f') => {
             cfg.show_footer = !cfg.show_footer;
-            app.lines_per_page =
-                (app.term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 });
+            app.lines_per_page = page_height(app.term_rows, cfg);
             // Kept like the same switch in the settings menu
             save_config(cfg);
         }
@@ -83,12 +82,12 @@ pub fn handle_reading_input(
     false
 }
 
-pub fn handle_toc_input(
+pub fn handle_toc_input<R: Read + Seek>(
     code: KeyCode,
     app: &mut AppState,
     cfg: &Config,
     lines: &mut Vec<String>,
-    archive: &mut ZipArchive<File>,
+    archive: &mut ZipArchive<R>,
     spine: &[(String, String)],
 ) -> bool {
     match code {
@@ -114,12 +113,12 @@ pub fn handle_toc_input(
     false
 }
 
-pub fn handle_settings_input(
+pub fn handle_settings_input<R: Read + Seek>(
     code: KeyCode,
     app: &mut AppState,
     cfg: &mut Config,
     lines: &mut Vec<String>,
-    archive: &mut ZipArchive<File>,
+    archive: &mut ZipArchive<R>,
     spine: &[(String, String)],
 ) -> bool {
     match code {
@@ -130,8 +129,7 @@ pub fn handle_settings_input(
         | KeyCode::Char('S')
         | KeyCode::Enter => {
             save_config(cfg);
-            app.lines_per_page =
-                (app.term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 });
+            app.lines_per_page = page_height(app.term_rows, cfg);
             app.mode = AppMode::Reading;
         }
 
@@ -152,11 +150,11 @@ pub fn handle_settings_input(
     false
 }
 
-pub fn update_layout_live(
+pub fn update_layout_live<R: Read + Seek>(
     app: &mut AppState,
     cfg: &Config,
     lines: &mut Vec<String>,
-    archive: &mut ZipArchive<File>,
+    archive: &mut ZipArchive<R>,
     spine: &[(String, String)],
 ) {
     let current_progress = if lines.is_empty() {
@@ -164,13 +162,7 @@ pub fn update_layout_live(
     } else {
         app.offset as f64 / lines.len() as f64
     };
-    app.dynamic_width = std::cmp::max(
-        10,
-        std::cmp::min(
-            cfg.max_width,
-            (app.term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right),
-        ),
-    );
+    app.dynamic_width = text_width(app.term_cols, cfg);
     *lines = load_current(app, cfg, archive, spine);
     app.offset = (current_progress * lines.len() as f64).floor() as usize;
     if app.offset >= lines.len() {
@@ -178,13 +170,13 @@ pub fn update_layout_live(
     }
 }
 
-pub fn handle_resize(
+pub fn handle_resize<R: Read + Seek>(
     new_cols: u16,
     new_rows: u16,
     app: &mut AppState,
     cfg: &Config,
     lines: &mut Vec<String>,
-    archive: &mut ZipArchive<File>,
+    archive: &mut ZipArchive<R>,
     spine: &[(String, String)],
 ) {
     let current_progress = if lines.is_empty() {
@@ -194,15 +186,8 @@ pub fn handle_resize(
     };
     app.term_cols = new_cols;
     app.term_rows = new_rows;
-    app.dynamic_width = std::cmp::max(
-        10,
-        std::cmp::min(
-            cfg.max_width,
-            (app.term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right),
-        ),
-    );
-    app.lines_per_page =
-        (app.term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 });
+    app.dynamic_width = text_width(app.term_cols, cfg);
+    app.lines_per_page = page_height(app.term_rows, cfg);
 
     *lines = load_current(app, cfg, archive, spine);
     app.offset = (current_progress * lines.len() as f64).floor() as usize;

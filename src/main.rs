@@ -5,6 +5,8 @@ mod i18n;
 mod images;
 mod paths;
 mod state; // <-- Register our new state module
+#[cfg(test)]
+mod test_support;
 mod ui;
 mod width;
 
