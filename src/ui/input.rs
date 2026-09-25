@@ -2,9 +2,8 @@ use crossterm::event::KeyCode;
 use std::fs::File;
 use zip::ZipArchive;
 
-use super::{AppMode, AppState, SETTINGS_ITEMS};
+use super::{AppMode, AppState, SETTINGS_ITEMS, load_current};
 use crate::config::{Alignment, Config, ProgressMode, Theme, save_config};
-use crate::epub::load_chapter;
 use crate::i18n;
 
 pub fn handle_reading_input(
@@ -37,12 +36,7 @@ pub fn handle_reading_input(
                 app.offset += 1;
             } else if app.chapter_index + 1 < spine.len() {
                 app.chapter_index += 1;
-                *lines = load_chapter(
-                    archive,
-                    &spine[app.chapter_index].0,
-                    app.dynamic_width,
-                    cfg.margin_left,
-                );
+                *lines = load_current(app, cfg, archive, spine);
                 app.offset = 0;
             }
         }
@@ -51,12 +45,7 @@ pub fn handle_reading_input(
                 app.offset -= 1;
             } else if app.chapter_index > 0 {
                 app.chapter_index -= 1;
-                *lines = load_chapter(
-                    archive,
-                    &spine[app.chapter_index].0,
-                    app.dynamic_width,
-                    cfg.margin_left,
-                );
+                *lines = load_current(app, cfg, archive, spine);
                 app.offset = if lines.len() > app.lines_per_page {
                     lines.len() - app.lines_per_page
                 } else {
@@ -72,12 +61,7 @@ pub fn handle_reading_input(
                 );
             } else if app.chapter_index + 1 < spine.len() {
                 app.chapter_index += 1;
-                *lines = load_chapter(
-                    archive,
-                    &spine[app.chapter_index].0,
-                    app.dynamic_width,
-                    cfg.margin_left,
-                );
+                *lines = load_current(app, cfg, archive, spine);
                 app.offset = 0;
             }
         }
@@ -86,12 +70,7 @@ pub fn handle_reading_input(
                 app.offset = app.offset.saturating_sub(cfg.scroll_by_lines);
             } else if app.chapter_index > 0 {
                 app.chapter_index -= 1;
-                *lines = load_chapter(
-                    archive,
-                    &spine[app.chapter_index].0,
-                    app.dynamic_width,
-                    cfg.margin_left,
-                );
+                *lines = load_current(app, cfg, archive, spine);
                 app.offset = if lines.len() > app.lines_per_page {
                     lines.len() - app.lines_per_page
                 } else {
@@ -126,12 +105,7 @@ pub fn handle_toc_input(
         }
         KeyCode::Enter => {
             app.chapter_index = app.toc_cursor;
-            *lines = load_chapter(
-                archive,
-                &spine[app.chapter_index].0,
-                app.dynamic_width,
-                cfg.margin_left,
-            );
+            *lines = load_current(app, cfg, archive, spine);
             app.offset = 0;
             app.mode = AppMode::Reading;
         }
@@ -211,7 +185,9 @@ pub fn handle_settings_input(
                         Theme::Monokai => Theme::Gruvbox,
                         Theme::Catppuccin => Theme::Monokai,
                         Theme::Oceanic => Theme::Catppuccin,
-                    }
+                    };
+                    // Half-block pictures blend into the theme's background
+                    text_changed = true;
                 }
                 5 => {
                     cfg.language = cfg.language.prev();
@@ -219,30 +195,34 @@ pub fn handle_settings_input(
                     // Reloads the chapter so its [Image] labels change language too
                     text_changed = true;
                 }
-                6 => cfg.show_footer = !cfg.show_footer,
-                7 => cfg.dim_footer = !cfg.dim_footer,
-                8 => {
+                6 => {
+                    cfg.images = cfg.images.prev();
+                    text_changed = true;
+                }
+                7 => cfg.show_footer = !cfg.show_footer,
+                8 => cfg.dim_footer = !cfg.dim_footer,
+                9 => {
                     cfg.footer_align = match cfg.footer_align {
                         Alignment::Left => Alignment::Right,
                         Alignment::Center => Alignment::Left,
                         Alignment::Right => Alignment::Center,
                     }
                 }
-                9 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                10 => {
+                10 => cfg.show_chapter_title = !cfg.show_chapter_title,
+                11 => {
                     cfg.progress_mode = match cfg.progress_mode {
                         ProgressMode::Chapter => ProgressMode::Overall,
                         ProgressMode::Overall => ProgressMode::Chapter,
                     }
                 }
-                11 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                12 => {
+                12 => cfg.show_progress_bar = !cfg.show_progress_bar,
+                13 => {
                     if cfg.progress_bar_length > 5 {
                         cfg.progress_bar_length -= 1;
                     }
                 }
-                13 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                14 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                14 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                15 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed {
@@ -289,7 +269,9 @@ pub fn handle_settings_input(
                         Theme::Monokai => Theme::Catppuccin,
                         Theme::Catppuccin => Theme::Oceanic,
                         Theme::Oceanic => Theme::Default,
-                    }
+                    };
+                    // Half-block pictures blend into the theme's background
+                    text_changed = true;
                 }
                 5 => {
                     cfg.language = cfg.language.next();
@@ -297,30 +279,34 @@ pub fn handle_settings_input(
                     // Reloads the chapter so its [Image] labels change language too
                     text_changed = true;
                 }
-                6 => cfg.show_footer = !cfg.show_footer,
-                7 => cfg.dim_footer = !cfg.dim_footer,
-                8 => {
+                6 => {
+                    cfg.images = cfg.images.next();
+                    text_changed = true;
+                }
+                7 => cfg.show_footer = !cfg.show_footer,
+                8 => cfg.dim_footer = !cfg.dim_footer,
+                9 => {
                     cfg.footer_align = match cfg.footer_align {
                         Alignment::Left => Alignment::Center,
                         Alignment::Center => Alignment::Right,
                         Alignment::Right => Alignment::Left,
                     }
                 }
-                9 => cfg.show_chapter_title = !cfg.show_chapter_title,
-                10 => {
+                10 => cfg.show_chapter_title = !cfg.show_chapter_title,
+                11 => {
                     cfg.progress_mode = match cfg.progress_mode {
                         ProgressMode::Chapter => ProgressMode::Overall,
                         ProgressMode::Overall => ProgressMode::Chapter,
                     }
                 }
-                11 => cfg.show_progress_bar = !cfg.show_progress_bar,
-                12 => {
+                12 => cfg.show_progress_bar = !cfg.show_progress_bar,
+                13 => {
                     if cfg.progress_bar_length < 100 {
                         cfg.progress_bar_length += 1;
                     }
                 }
-                13 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
-                14 => cfg.show_chapter_location = !cfg.show_chapter_location,
+                14 => cfg.show_progress_percentage = !cfg.show_progress_percentage,
+                15 => cfg.show_chapter_location = !cfg.show_chapter_location,
                 _ => {}
             }
             if text_changed {
@@ -351,12 +337,7 @@ pub fn update_layout_live(
             (app.term_cols as usize).saturating_sub(cfg.margin_left + cfg.margin_right),
         ),
     );
-    *lines = load_chapter(
-        archive,
-        &spine[app.chapter_index].0,
-        app.dynamic_width,
-        cfg.margin_left,
-    );
+    *lines = load_current(app, cfg, archive, spine);
     app.offset = (current_progress * lines.len() as f64).floor() as usize;
     if app.offset >= lines.len() {
         app.offset = lines.len().saturating_sub(app.lines_per_page);
@@ -389,12 +370,7 @@ pub fn handle_resize(
     app.lines_per_page =
         (app.term_rows as usize).saturating_sub(if cfg.show_footer { 2 } else { 0 });
 
-    *lines = load_chapter(
-        archive,
-        &spine[app.chapter_index].0,
-        app.dynamic_width,
-        cfg.margin_left,
-    );
+    *lines = load_current(app, cfg, archive, spine);
     app.offset = (current_progress * lines.len() as f64).floor() as usize;
     if app.offset >= lines.len() {
         app.offset = lines.len().saturating_sub(app.lines_per_page);

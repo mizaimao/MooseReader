@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Language;
+use crate::images;
 use crate::paths;
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy)]
@@ -53,6 +54,7 @@ pub struct Config {
     pub progress_bar_length: usize,
     pub progress_mode: ProgressMode,
     pub language: Language,
+    pub images: images::Setting,
 }
 
 impl Default for Config {
@@ -73,6 +75,7 @@ impl Default for Config {
             progress_bar_length: 10,
             progress_mode: ProgressMode::Overall,
             language: Language::Auto,
+            images: images::Setting::Auto,
         }
     }
 }

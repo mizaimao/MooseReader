@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use super::AppState;
 use crate::config::{Alignment, Config, ProgressMode, Theme};
 use crate::i18n::{Text, tr};
+use crate::images;
 use crate::width;
 
 pub struct Palette {
@@ -242,8 +243,17 @@ pub fn draw_reading_view(
 ) -> io::Result<()> {
     let end = std::cmp::min(app.offset + app.lines_per_page, lines.len());
     for (row_idx, i) in (app.offset..end).enumerate() {
-        queue!(stdout, MoveTo(0, row_idx as u16))?;
-        write!(stdout, "{}\r", lines[i])?;
+        // Colors are set per line, since a half-block picture line ends on the terminal defaults
+        queue!(
+            stdout,
+            MoveTo(0, row_idx as u16),
+            SetForegroundColor(pal.fg),
+            SetBackgroundColor(pal.bg)
+        )?;
+        // Rows of a picture the terminal draws stay empty here
+        if !lines[i].starts_with(images::MARKER) {
+            write!(stdout, "{}\r", lines[i])?;
+        }
     }
 
     if cfg.show_footer {
@@ -432,7 +442,7 @@ pub fn draw_settings_menu(
     pal: &Palette,
 ) -> io::Result<()> {
     let box_width: u16 = 36;
-    let box_height: u16 = 22;
+    let box_height: u16 = 23;
 
     let text_center_x = cfg.margin_left + (app.dynamic_width / 2);
     let mut start_x = text_center_x.saturating_sub((box_width / 2) as usize) as u16;
@@ -471,6 +481,7 @@ pub fn draw_settings_menu(
         tr(Text::ScrollLines),
         tr(Text::Theme),
         tr(Text::Language),
+        tr(Text::Images),
         tr(Text::ShowFooter),
         tr(Text::DimFooter),
         tr(Text::FooterAlign),
@@ -513,6 +524,7 @@ pub fn draw_settings_menu(
         cfg.scroll_by_lines.to_string(),
         theme_str.to_string(),
         cfg.language.name().to_string(),
+        cfg.images.name().to_string(),
         on_off(cfg.show_footer),
         on_off(cfg.dim_footer),
         align_str.to_string(),
@@ -541,7 +553,7 @@ pub fn draw_settings_menu(
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
-    for i in 0..6 {
+    for i in 0..7 {
         queue!(stdout, MoveTo(start_x, start_y + 3 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{} < {} >", label(i), value(i));
@@ -568,9 +580,9 @@ pub fn draw_settings_menu(
         }
     }
 
-    queue!(stdout, MoveTo(start_x, start_y + 9))?;
-    write!(stdout, "│{}│", inner_pad)?;
     queue!(stdout, MoveTo(start_x, start_y + 10))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 11))?;
     write!(stdout, "│")?;
     queue!(stdout, SetForegroundColor(pal.dim))?;
     write!(
@@ -581,7 +593,7 @@ pub fn draw_settings_menu(
     queue!(stdout, SetForegroundColor(pal.accent))?;
     write!(stdout, "│")?;
 
-    for i in 6..15 {
+    for i in 7..16 {
         queue!(stdout, MoveTo(start_x, start_y + 5 + i as u16))?;
         if app.settings_cursor == i {
             let content = format!("{} < {} >", label(i), value(i));
@@ -608,9 +620,9 @@ pub fn draw_settings_menu(
         }
     }
 
-    queue!(stdout, MoveTo(start_x, start_y + 20))?;
-    write!(stdout, "│{}│", inner_pad)?;
     queue!(stdout, MoveTo(start_x, start_y + 21))?;
+    write!(stdout, "│{}│", inner_pad)?;
+    queue!(stdout, MoveTo(start_x, start_y + 22))?;
     write!(stdout, "╰{}╯", "─".repeat(box_width as usize - 2))?;
 
     queue!(stdout, SetForegroundColor(pal.fg))?;
