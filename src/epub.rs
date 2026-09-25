@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::io::{Read, Seek};
 use zip::ZipArchive;
 
+use crate::width;
+
 const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
 const NCX_MEDIA_TYPE: &str = "application/x-dtbncx+xml";
 
@@ -651,16 +653,17 @@ pub fn get_epub_spine<R: Read + Seek>(
 
 /// Names a page that no table of contents lists by its first line of text.
 fn first_line<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Option<String> {
-    const MAX_CHARS: usize = 40;
+    const MAX_COLUMNS: usize = 40;
     let html = read_zip_file(archive, path)?;
     let text = strip_ansi(&format_html_for_terminal(&html).replace('\x1e', ""));
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
-    if line.chars().count() <= MAX_CHARS {
+    if width::width(line) <= MAX_COLUMNS {
         return Some(line.to_string());
     }
-    let cut: String = line.chars().take(MAX_CHARS - 1).collect();
+    let cut = width::truncate(line, MAX_COLUMNS);
+    let cut = cut.trim_end_matches('…');
     // Break at a word boundary when there is one
-    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    let cut = cut.rsplit_once(' ').map_or(cut, |(head, _)| head);
     Some(format!("{}…", cut.trim_end()))
 }
 
@@ -723,15 +726,13 @@ pub fn load_chapter<R: Read + Seek>(
         last_was_empty = false;
 
         if trimmed.contains('\x1e') {
-            let clean_line = styles.seal(&trimmed.replace('\x1e', ""));
-            let visible_len = strip_ansi(&clean_line).chars().count();
-
-            let pad = if wrap_width > visible_len {
-                (wrap_width - visible_len) / 2
-            } else {
-                0
-            };
-            wrapped_lines.push(format!("{}{}{}", indent, " ".repeat(pad), clean_line));
+            // Headings wrap like body text, each line centered by its width on screen
+            let heading = trimmed.replace('\x1e', "");
+            for part in textwrap::wrap(&heading, wrap_width) {
+                let sealed = styles.seal(&part);
+                let pad = wrap_width.saturating_sub(width::width(&sealed)) / 2;
+                wrapped_lines.push(format!("{}{}{}", indent, " ".repeat(pad), sealed));
+            }
         } else {
             let wrapped = textwrap::wrap(trimmed, wrap_width);
             for w in wrapped {
