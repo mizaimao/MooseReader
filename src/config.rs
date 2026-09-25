@@ -74,14 +74,14 @@ impl Default for Config {
 
 pub fn load_or_create_config() -> Config {
     let config_path = paths::config_file();
-    if let Some(file_content) = paths::read_with_legacy(&config_path, "reader_config.json") {
-        if let Ok(config) = serde_json::from_str(&file_content) {
-            // Rewrites a config carried over from the legacy location into the new one
-            if !config_path.exists() {
-                save_config(&config);
-            }
-            return config;
+    if let Some(file_content) = paths::read_with_legacy(&config_path, "reader_config.json")
+        && let Ok(config) = serde_json::from_str(&file_content)
+    {
+        // Rewrites a config carried over from the legacy location into the new one
+        if !config_path.exists() {
+            save_config(&config);
         }
+        return config;
     }
     let default_config = Config::default();
     save_config(&default_config);

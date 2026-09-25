@@ -332,9 +332,9 @@ pub fn draw_toc_menu(
     spine: &[(String, String)],
     pal: &Palette,
 ) -> io::Result<()> {
-    let box_width_usize = std::cmp::max(30, std::cmp::min(70, app.dynamic_width.saturating_sub(4)));
+    let box_width_usize = app.dynamic_width.saturating_sub(4).clamp(30, 70);
     let box_width = box_width_usize as u16;
-    let box_height = std::cmp::max(10, std::cmp::min(25, app.term_rows.saturating_sub(4)));
+    let box_height = app.term_rows.saturating_sub(4).clamp(10, 25);
 
     let text_center_x = cfg.margin_left + (app.dynamic_width / 2);
     let mut start_x = text_center_x.saturating_sub(box_width_usize / 2) as u16;
