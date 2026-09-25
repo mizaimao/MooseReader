@@ -4,16 +4,47 @@ use std::fs::File;
 use std::io::Read;
 use zip::ZipArchive;
 
+/// Tags that start a new line of their own, open or closing.
+fn is_block(tag: &str) -> bool {
+    matches!(
+        tag.trim_start_matches('/'),
+        "p" | "div"
+            | "br"
+            | "hr"
+            | "blockquote"
+            | "section"
+            | "article"
+            | "aside"
+            | "header"
+            | "footer"
+            | "nav"
+            | "figure"
+            | "figcaption"
+            | "table"
+            | "tr"
+            | "dl"
+            | "dt"
+            | "dd"
+            | "address"
+            | "center"
+    )
+}
+
 fn format_html_for_terminal(input: &str) -> String {
     let mut in_tag = false;
     let mut current_tag = String::new();
     let mut output = String::with_capacity(input.len());
-    let mut chars = input.chars();
 
     let mut ignore_mode = false;
     let mut expected_closing_tag = String::new();
 
-    while let Some(c) = chars.next() {
+    // Open lists, innermost last: None for <ul>, Some(next number) for <ol>
+    let mut lists: Vec<Option<usize>> = Vec::new();
+    let mut in_pre = false;
+    // Source line breaks are plain whitespace in HTML; only block tags start new lines
+    let mut at_space = true;
+
+    for c in input.chars() {
         if c == '<' {
             in_tag = true;
             current_tag.clear();
@@ -22,12 +53,22 @@ fn format_html_for_terminal(input: &str) -> String {
         if c == '>' {
             in_tag = false;
             let tag_lower = current_tag.to_lowercase();
-            let base_tag = tag_lower.split_whitespace().next().unwrap_or("");
+            let self_closing = tag_lower.ends_with('/');
+            let base_tag = tag_lower
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/');
 
             if ignore_mode {
                 if base_tag == expected_closing_tag {
                     ignore_mode = false;
                 }
+                continue;
+            }
+
+            // An empty element such as <a id="c05"/> must not switch on a style that never closes
+            if self_closing && !is_block(base_tag) && !matches!(base_tag, "img" | "image") {
                 continue;
             }
 
@@ -41,19 +82,68 @@ fn format_html_for_terminal(input: &str) -> String {
             }
 
             match base_tag {
-                "h1" | "h2" | "h3" => output.push_str("\x1b[1m\x1e"),
+                "h1" | "h2" | "h3" => {
+                    output.push_str("\n\x1b[1m\x1e");
+                    at_space = true;
+                }
 
                 // FIX: Changed from \x1b[0m to \x1b[22m to stop wiping the background color
-                "/h1" | "/h2" | "/h3" => output.push_str("\x1b[22m\n\n"),
+                "/h1" | "/h2" | "/h3" => {
+                    output.push_str("\x1b[22m\n\n");
+                    at_space = true;
+                }
+
+                "h4" | "h5" | "h6" => {
+                    output.push_str("\n\x1b[1m");
+                    at_space = true;
+                }
+                "/h4" | "/h5" | "/h6" => {
+                    output.push_str("\x1b[22m\n");
+                    at_space = true;
+                }
 
                 "b" | "strong" => output.push_str("\x1b[1m"),
                 "/b" | "/strong" => output.push_str("\x1b[22m"),
                 "i" | "em" => output.push_str("\x1b[3m"),
                 "/i" | "/em" => output.push_str("\x1b[23m"),
 
-                "p" | "div" | "/p" | "/div" | "br" | "br/" => output.push('\n'),
+                "ul" | "ol" | "/ul" | "/ol" => {
+                    match base_tag {
+                        "ul" => lists.push(None),
+                        "ol" => lists.push(Some(1)),
+                        _ => {
+                            lists.pop();
+                        }
+                    }
+                    output.push('\n');
+                    at_space = true;
+                }
+                "li" => {
+                    output.push('\n');
+                    match lists.last_mut() {
+                        Some(Some(n)) => {
+                            output.push_str(&format!("{}. ", n));
+                            *n += 1;
+                        }
+                        _ => output.push_str("• "),
+                    }
+                    at_space = true;
+                }
+                "/li" => {
+                    output.push('\n');
+                    at_space = true;
+                }
 
-                "img" | "image" => output.push_str("\n\x1b[2m[Image]\x1b[22m\n"),
+                "pre" | "/pre" => {
+                    in_pre = base_tag == "pre";
+                    output.push('\n');
+                    at_space = true;
+                }
+
+                "img" | "image" => {
+                    output.push_str("\n\x1b[2m[Image]\x1b[22m\n");
+                    at_space = true;
+                }
 
                 "a" => {
                     let mut href = "";
@@ -76,6 +166,11 @@ fn format_html_for_terminal(input: &str) -> String {
                 }
                 "/a" => output.push_str("\x1b[24m\x1b]8;;\x1b\\"),
 
+                tag if is_block(tag) => {
+                    output.push('\n');
+                    at_space = true;
+                }
+
                 _ => {}
             }
             continue;
@@ -83,21 +178,103 @@ fn format_html_for_terminal(input: &str) -> String {
 
         if in_tag {
             current_tag.push(c);
-        } else if !ignore_mode {
+        } else if ignore_mode {
+            continue;
+        } else if in_pre {
             output.push(c);
+        } else if c.is_ascii_whitespace() {
+            // Collapses runs of spaces and source line breaks; leaves &nbsp; (U+00A0) alone
+            if !at_space {
+                output.push(' ');
+                at_space = true;
+            }
+        } else {
+            output.push(c);
+            at_space = false;
         }
     }
 
-    output
-        .replace("&nbsp;", " ")
-        .replace("&rsquo;", "'")
-        .replace("&lsquo;", "'")
-        .replace("&rdquo;", "\"")
-        .replace("&ldquo;", "\"")
-        .replace("&mdash;", "—")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
+    decode_entities(&output)
+}
+
+/// Decodes character references in a single pass, so "&amp;lt;" stays "&lt;".
+/// Unknown or malformed references are kept as written.
+fn decode_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        // Entity names are short; a ';' further away means this '&' is plain text
+        let end = rest.bytes().skip(1).take(32).position(|b| b == b';');
+        match end {
+            Some(end) if push_entity(&mut out, &rest[1..1 + end]) => rest = &rest[end + 2..],
+            _ => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn push_entity(out: &mut String, name: &str) -> bool {
+    if let Some(num) = name.strip_prefix('#') {
+        let code = match num.strip_prefix(['x', 'X']) {
+            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+            None => num.parse().ok(),
+        };
+        return match code.and_then(char::from_u32) {
+            Some(ch) => {
+                out.push(ch);
+                true
+            }
+            None => false,
+        };
+    }
+    let text = match name {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => "\u{a0}",
+        "shy" => "",
+        "ensp" | "emsp" | "thinsp" => " ",
+        "lsquo" => "‘",
+        "rsquo" => "’",
+        "sbquo" => "‚",
+        "ldquo" => "“",
+        "rdquo" => "”",
+        "bdquo" => "„",
+        "laquo" => "«",
+        "raquo" => "»",
+        "lsaquo" => "‹",
+        "rsaquo" => "›",
+        "ndash" => "–",
+        "mdash" => "—",
+        "hellip" => "…",
+        "bull" => "•",
+        "middot" => "·",
+        "prime" => "′",
+        "Prime" => "″",
+        "deg" => "°",
+        "times" => "×",
+        "divide" => "÷",
+        "copy" => "©",
+        "reg" => "®",
+        "trade" => "™",
+        "sect" => "§",
+        "para" => "¶",
+        "dagger" => "†",
+        "Dagger" => "‡",
+        "iexcl" => "¡",
+        "iquest" => "¿",
+        _ => return false,
+    };
+    out.push_str(text);
+    true
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -264,4 +441,59 @@ pub fn load_chapter(
     }
 
     wrapped_lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Visible text lines of formatted HTML, without styling or blank lines.
+    fn text_lines(html: &str) -> Vec<String> {
+        strip_ansi(&format_html_for_terminal(html).replace('\x1e', ""))
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn self_closing_anchor_does_not_underline() {
+        let out = format_html_for_terminal(r#"<p><a id="c05"/></p><div>Text</div>"#);
+        assert!(!out.contains("\x1b[4m"), "{:?}", out);
+    }
+
+    #[test]
+    fn source_line_breaks_are_spaces() {
+        assert_eq!(text_lines("<p>Hello\n    world</p>"), ["Hello world"]);
+    }
+
+    #[test]
+    fn list_items_get_their_own_lines() {
+        let html = "<ul>\n  <li>\n    One\n  </li>\n  <li>Two</li>\n</ul>";
+        assert_eq!(text_lines(html), ["• One", "• Two"]);
+        let html = "<ol><li>First</li><li>Second</li></ol>";
+        assert_eq!(text_lines(html), ["1. First", "2. Second"]);
+    }
+
+    #[test]
+    fn minor_headings_are_bold_lines() {
+        let out = format_html_for_terminal("text<h4>Notes</h4>more");
+        assert!(out.contains("\n\x1b[1mNotes\x1b[22m\n"), "{:?}", out);
+    }
+
+    #[test]
+    fn pre_keeps_line_breaks() {
+        assert_eq!(text_lines("<pre>a\nb</pre>"), ["a", "b"]);
+    }
+
+    #[test]
+    fn entities_decode_once() {
+        assert_eq!(decode_entities("don&#8217;t &#x2014; &rsquo;"), "don’t — ’");
+        assert_eq!(decode_entities("&amp;lt;"), "&lt;");
+        assert_eq!(
+            decode_entities("AT&T &unknown; &#xZZ; &"),
+            "AT&T &unknown; &#xZZ; &"
+        );
+        assert_eq!(decode_entities("a&nbsp;b"), "a\u{a0}b");
+    }
 }
