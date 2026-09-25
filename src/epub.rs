@@ -407,9 +407,41 @@ impl OpenStyles {
 
 fn read_zip_file<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Option<String> {
     let mut file = archive.by_name(name).ok()?;
-    let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
-    Some(content)
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(decode_text(&bytes))
+}
+
+/// Decodes a text file from the book. EPUB allows UTF-8 and UTF-16 (told apart
+/// by the byte order mark); anything else that isn't valid UTF-8 is read as
+/// Windows-1252, as browsers read files labelled latin1 (WHATWG Encoding).
+fn decode_text(bytes: &[u8]) -> String {
+    fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+        let units: Vec<u16> = bytes.chunks_exact(2).map(|c| unit([c[0], c[1]])).collect();
+        String::from_utf16_lossy(&units)
+    }
+    match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_string(),
+            Err(_) => bytes.iter().map(|&b| windows_1252(b)).collect(),
+        },
+    }
+}
+
+fn windows_1252(byte: u8) -> char {
+    // 0x80-0x9F are the only bytes where Windows-1252 differs from Latin-1
+    const HIGH: [char; 32] = [
+        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
+        '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}',
+        'ž', 'Ÿ',
+    ];
+    match byte {
+        0x80..=0x9F => HIGH[(byte - 0x80) as usize],
+        _ => byte as char,
+    }
 }
 
 fn parse_xml(xml: &str) -> Option<Document<'_>> {
@@ -955,5 +987,24 @@ mod tests {
         assert_eq!(chapter_starts(&mut archive, &spine), [0.0, 0.25, 1.0]);
         let mut empty = epub(&[("a.html", ""), ("b.html", "")]);
         assert_eq!(chapter_starts(&mut empty, &spine), [0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn chapters_decode_utf16_and_windows_1252() {
+        let mut utf16le = vec![0xFF, 0xFE];
+        utf16le.extend(
+            "<p>Здравствуй</p>"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        assert_eq!(decode_text(&utf16le), "<p>Здравствуй</p>");
+        let mut utf16be = vec![0xFE, 0xFF];
+        utf16be.extend("<p>Hi</p>".encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(decode_text(&utf16be), "<p>Hi</p>");
+        assert_eq!(decode_text(b"\xEF\xBB\xBFplain"), "plain");
+        assert_eq!(
+            decode_text(b"caf\xE9 \x93quoted\x94 \x80"),
+            "café “quoted” €"
+        );
     }
 }
