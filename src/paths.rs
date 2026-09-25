@@ -7,12 +7,10 @@ const APP_DIR: &str = "moosereader";
 /// Resolves an XDG base directory: `$var` when it holds an absolute path,
 /// otherwise `$HOME/<fallback>` (XDG Base Directory Specification).
 fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os(var).map(PathBuf::from) {
-        if dir.is_absolute() {
-            return Some(dir);
-        }
-    }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(fallback))
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(fallback)))
 }
 
 /// Settings live in `$XDG_CONFIG_HOME/moosereader/config.json` (default `~/.config`).
