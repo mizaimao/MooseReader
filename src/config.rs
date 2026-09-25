@@ -34,6 +34,8 @@ pub enum Theme {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+// Settings missing from an older file take their defaults instead of discarding the file
+#[serde(default)]
 pub struct Config {
     pub max_width: usize,
     pub margin_left: usize,
@@ -91,5 +93,19 @@ pub fn load_or_create_config() -> Config {
 pub fn save_config(cfg: &Config) {
     if let Ok(json) = serde_json::to_string_pretty(cfg) {
         let _ = paths::write_atomic(&paths::config_file(), &json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_settings_keep_the_rest() {
+        let cfg: Config =
+            serde_json::from_str(r#"{ "max_width": 108, "theme": "dracula" }"#).unwrap();
+        assert_eq!(cfg.max_width, 108);
+        assert!(cfg.theme == Theme::Dracula);
+        assert_eq!(cfg.margin_left, Config::default().margin_left);
     }
 }
